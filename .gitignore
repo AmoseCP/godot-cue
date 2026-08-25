@@ -26,3 +26,14 @@ tests/render_a/
 tests/render_b/
 *.avi
 *.png.import
+
+# 测试音频可由 tests/make_fixtures.gd 再生,不进仓库(合计约 26MB)。
+# examples/hello_cue/voice.wav 是例外 —— 示例必须 clone 下来就能跑。
+tests/probe/*.wav
+tests/probe/*.wav.import
+tests/determinism/*.wav
+tests/determinism/*.wav.import
+tests/determinism/fire_log.txt
+
+# 本地运行时测量记录
+runtimes.md

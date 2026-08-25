@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://cuehelloexample"]
+
+[ext_resource type="Script" path="res://examples/hello_cue/main.gd" id="1_hello"]
+
+[node name="Main" type="Node2D"]
+script = ExtResource("1_hello")

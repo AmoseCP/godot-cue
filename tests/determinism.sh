@@ -20,6 +20,14 @@ if [ ! -x "$GODOT" ]; then
 	exit 2
 fi
 
+# fixture 是可再生的,不进 git
+if [ ! -f "$ROOT/tests/determinism/tone_3s.wav" ]; then
+	echo "生成测试音频..."
+	( cd "$ROOT" && "$GODOT" --headless --path . --script tests/make_fixtures.gd > /dev/null 2>&1 )
+	( cd "$ROOT" && "$GODOT" --headless --path . --script tests/determinism/make_assets.gd > /dev/null 2>&1 )
+	( cd "$ROOT" && "$GODOT" --headless --import --path . > /dev/null 2>&1 )
+fi
+
 render() {
 	local out="$1" log="$2"
 	rm -rf "$out"; mkdir -p "$out"

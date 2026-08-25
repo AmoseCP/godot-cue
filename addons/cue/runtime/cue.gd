@@ -29,11 +29,34 @@ var _playing: bool = false
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	_ensure_player()
+	set_process(false)
+
+
+func _exit_tree() -> void:
+	# 自动加载是最后才被拆掉的,退出时自己收个尾。
+	#
+	# 注意:这[b]不能[/b]消除进程退出时的
+	# "1 resources still in use at exit" —— 那是引擎自身的关闭顺序问题,
+	# 用一个裸 AudioStreamPlayer 播放 AudioStreamWAV 再退出即可复现,
+	# 全程不涉及 Cue(见 NOTES.md M6)。这里做清理只是卫生习惯。
+	if _player != null:
+		_player.stop()
+		_player.stream = null
+	_sheet = null
+	_queue.clear()
+
+
+## 自动加载之间的 _ready 顺序是按注册顺序来的,别的自动加载完全可能在
+## Cue._ready() 之前就调 load_sheet()。所以播放器要能被随时按需创建,
+## 不能只在 _ready 里建 —— 否则那种情况下 _player 是 null,直接崩。
+func _ensure_player() -> void:
+	if _player != null:
+		return
 	_player = AudioStreamPlayer.new()
 	_player.name = "CuePlayer"
 	add_child(_player)
 	_player.finished.connect(_on_stream_finished)
-	set_process(false)
 
 
 func load_sheet(sheet: CueSheet) -> void:
@@ -44,6 +67,7 @@ func load_sheet(sheet: CueSheet) -> void:
 	if not issues.is_empty():
 		for i in issues:
 			push_error("Cue:sheet 数据有问题 —— %s" % i)
+	_ensure_player()
 	stop()
 	_sheet = sheet
 	_player.stream = sheet.audio
@@ -68,6 +92,7 @@ func play(from: float = 0.0) -> void:
 	if _sheet == null:
 		push_error("Cue:还没有 load_sheet(),play() 无效。")
 		return
+	_ensure_player()
 	_seek_queue(from)
 	_playing = true
 	if _player.stream != null:

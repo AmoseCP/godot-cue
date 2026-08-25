@@ -11,20 +11,21 @@ config_version=5
 [application]
 
 config/name="Cue"
+run/main_scene="res://examples/hello_cue/main.tscn"
 config/features=PackedStringArray("4.7", "GL Compatibility")
 
 [autoload]
 
 Cue="*uid://cbco3i7ca0wsr"
 
+[editor]
+
+movie_writer/disable_vsync=true
+movie_writer/fps=30
+
 [editor_plugins]
 
 enabled=PackedStringArray("res://addons/cue/plugin.cfg")
-
-[editor]
-
-movie_writer/fps=30
-movie_writer/disable_vsync=true
 
 [rendering]
 

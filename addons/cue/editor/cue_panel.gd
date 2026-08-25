@@ -19,6 +19,7 @@ var _clock: CueClock = null
 var _name_edit: LineEdit = null
 var _renaming: CueMarker = null
 var _open_dialog: EditorFileDialog = null
+var _import_dialog: EditorFileDialog = null
 var _dirty: bool = false
 var _analyzing: bool = false
 
@@ -65,6 +66,7 @@ func _ready() -> void:
 	_transport.play_pause_requested.connect(_toggle_play)
 	_transport.stop_requested.connect(_stop)
 	_transport.analyze_requested.connect(analyze_waveform)
+	_transport.import_requested.connect(_import_dialog_show)
 	_transport.add_marker_requested.connect(func() -> void: _add_marker(state.maybe_snap(state.playhead)))
 	_transport.zoom_in_requested.connect(func() -> void: state.zoom_at(1.4, size.x * 0.5))
 	_transport.zoom_out_requested.connect(func() -> void: state.zoom_at(1.0 / 1.4, size.x * 0.5))
@@ -317,6 +319,85 @@ func _on_rename_submitted(text: String) -> void:
 func _cancel_rename() -> void:
 	_renaming = null
 	_name_edit.visible = false
+
+
+# ── 导入 ────────────────────────────────────────────────────────────
+
+func _import_dialog_show() -> void:
+	if state.sheet == null:
+		push_error("Cue:先打开一个 CueSheet 再导入。")
+		return
+	if _import_dialog == null:
+		_import_dialog = EditorFileDialog.new()
+		_import_dialog.file_mode = EditorFileDialog.FILE_MODE_OPEN_FILE
+		_import_dialog.access = EditorFileDialog.ACCESS_FILESYSTEM
+		_import_dialog.add_filter("*.json", "Rhubarb Lip Sync JSON")
+		_import_dialog.add_filter("*.TextGrid,*.textgrid", "Praat / MFA TextGrid")
+		_import_dialog.title = "导入口型 / 对齐数据"
+		_import_dialog.file_selected.connect(import_file)
+		add_child(_import_dialog)
+	_import_dialog.popup_centered_ratio(0.6)
+
+
+## 解析并作为[b]一次[/b] undo 动作写入 —— 导入 200 个口型标记后按一次
+## Ctrl+Z 就该全部消失,而不是按 200 次。
+func import_file(path: String) -> void:
+	var sheet := state.sheet
+	if sheet == null or _undo == null:
+		return
+	var res: CueImportResult
+	if path.get_extension().to_lower() == "json":
+		res = CueRhubarbImporter.parse(path)
+	else:
+		res = CueTextGridImporter.parse(path)
+	if not res.ok():
+		push_error(res.error)
+		return
+
+	# 重名在导入这一步就解决掉,保证 sheet 内名字唯一(PLAN 4.3)。
+	var taken := {}
+	for m in sheet.markers:
+		taken[m.name] = true
+	for m in res.markers:
+		var n := m.name
+		var i := 1
+		while taken.has(n):
+			n = StringName("%s_%d" % [m.name, i])
+			i += 1
+		m.name = n
+		taken[n] = true
+
+	_undo.create_action("Cue:导入 %s(%d 个标记)" % [path.get_file(), res.markers.size()],
+		UndoRedo.MERGE_DISABLE, sheet)
+	for m in res.markers:
+		_undo.add_do_method(sheet, "add_marker", m)
+	# 撤销时倒着删,顺序才对得上
+	for i in range(res.markers.size() - 1, -1, -1):
+		_undo.add_undo_method(sheet, "remove_marker", res.markers[i])
+	_undo.add_do_method(sheet, "touch")
+	_undo.add_undo_method(sheet, "touch")
+	_undo.commit_action()
+
+	_ensure_tracks(res.tracks)
+	print("Cue:", res.summary())
+
+
+## 导入带进来的新轨道要有个颜色,否则全挤在默认色上分不清。
+func _ensure_tracks(names: PackedStringArray) -> void:
+	var sheet := state.sheet
+	var existing := {}
+	for t in sheet.tracks:
+		existing[t.name] = true
+	var palette := [
+		Color(0.40, 0.70, 1.00), Color(1.00, 0.65, 0.30), Color(0.55, 0.90, 0.55),
+		Color(0.90, 0.55, 0.90), Color(0.95, 0.85, 0.40),
+	]
+	for n in names:
+		var sn := StringName(n)
+		if existing.has(sn):
+			continue
+		sheet.tracks.append(CueTrack.new(sn, palette[sheet.tracks.size() % palette.size()]))
+	state.notify_sheet_edited()
 
 
 # ── 打开对话框 / 滚动条 ─────────────────────────────────────────────

@@ -140,6 +140,28 @@ func _run() -> void:
 		_ok(_snapshot(sheet) == snapshot_before, "改成已存在的名字被拒绝,数据未变")
 		_ok(not sheet.validate().is_empty() == false, "拒绝后数据仍然健康")
 
+	# ── 导入必须是一次 undo 动作 ────────────────────────────────────
+	var n_before: int = sheet.markers.size()
+	var depth_before := ur.get_history_count()
+	panel.call("import_file", ProjectSettings.globalize_path("res://tests/fixtures/sample_rhubarb.json"))
+	await get_tree().process_frame
+	_ok(sheet.markers.size() == n_before + 12, "导入 12 个口型标记(得到 %d)" % (sheet.markers.size() - n_before))
+	_ok(ur.get_history_count() == depth_before + 1, "整批导入只占一条 undo 记录")
+	_ok(sheet.validate().is_empty(), "导入后无重名:%s" % sheet.validate())
+	_ok(sheet.tracks.size() > 0, "导入自动补上了轨道定义")
+	ur.undo()
+	await get_tree().process_frame
+	_ok(sheet.markers.size() == n_before, "一次撤销把整批导入全部移除(剩 %d)" % sheet.markers.size())
+	ur.redo()
+	await get_tree().process_frame
+	_ok(sheet.markers.size() == n_before + 12, "重做恢复整批")
+
+	# 再导入一次:名字必须自动去重
+	panel.call("import_file", ProjectSettings.globalize_path("res://tests/fixtures/sample_rhubarb.json"))
+	await get_tree().process_frame
+	_ok(sheet.validate().is_empty(), "重复导入仍无重名:%s" % sheet.validate())
+	_ok(sheet.markers.size() == n_before + 24, "两次导入共 24 个口型标记")
+
 	panel.queue_free()
 	print("EDIT RESULT ", "PASS" if _fail == 0 else "FAIL", "  %d 通过 / %d 失败" % [_pass, _fail])
 

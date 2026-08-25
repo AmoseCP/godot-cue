@@ -9,6 +9,7 @@ signal save_requested()
 signal play_pause_requested()
 signal stop_requested()
 signal analyze_requested()
+signal import_requested()
 signal zoom_in_requested()
 signal zoom_out_requested()
 signal zoom_fit_requested()
@@ -81,6 +82,9 @@ func _build() -> void:
 
 	_analyze_btn = _button("分析波形", "AudioStreamPlayer", "读取音频并重建峰值缓存")
 	_analyze_btn.pressed.connect(func() -> void: analyze_requested.emit())
+
+	var imp_btn := _button("导入", "AssetLib", "导入 Rhubarb JSON 或 MFA TextGrid")
+	imp_btn.pressed.connect(func() -> void: import_requested.emit())
 
 	_progress = ProgressBar.new()
 	_progress.custom_minimum_size.x = 90.0
