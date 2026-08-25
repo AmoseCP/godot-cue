@@ -88,6 +88,8 @@ func _ready() -> void:
 
 func _exit_tree() -> void:
 	# @tool 脚本会被反复重载,残留的连接会在下次 _ready 里变成重复连接。
+	if state != null and state.sheet != null and state.sheet.changed.is_connected(_after_edit):
+		state.sheet.changed.disconnect(_after_edit)
 	if _player != null and _player.playing:
 		_player.stop()
 
@@ -96,6 +98,11 @@ func _exit_tree() -> void:
 
 func open_sheet(sheet: CueSheet) -> void:
 	_stop()
+	var old := state.sheet
+	if old != null and old.changed.is_connected(_after_edit):
+		old.changed.disconnect(_after_edit)
+	if sheet != null and not sheet.changed.is_connected(_after_edit):
+		sheet.changed.connect(_after_edit)
 	state.set_sheet(sheet)
 	_player.stream = sheet.audio if sheet != null else null
 	_clock = CueClock.new(float(sheet.fps) if sheet != null else 30.0, _player)
@@ -230,9 +237,8 @@ func _add_marker(t: float) -> void:
 	_undo.create_action("Cue:添加标记", UndoRedo.MERGE_DISABLE, sheet)
 	_undo.add_do_method(sheet, "add_marker", m)
 	_undo.add_undo_method(sheet, "remove_marker", m)
-	_undo.add_do_reference(m)
-	_undo.add_do_method(self, "_after_edit")
-	_undo.add_undo_method(self, "_after_edit")
+	_undo.add_do_method(sheet, "touch")
+	_undo.add_undo_method(sheet, "touch")
 	_undo.commit_action()
 	_view.select(m)
 	_begin_rename(m)
@@ -246,10 +252,8 @@ func _delete_marker(m: CueMarker) -> void:
 	_undo.create_action("Cue:删除标记「%s」" % m.name, UndoRedo.MERGE_DISABLE, sheet)
 	_undo.add_do_method(sheet, "remove_marker", m)
 	_undo.add_undo_method(sheet, "insert_marker", m, idx)
-	# 删除后 sheet 不再持有它,undo 栈必须自己撑住这个引用。
-	_undo.add_undo_reference(m)
-	_undo.add_do_method(self, "_after_edit")
-	_undo.add_undo_method(self, "_after_edit")
+	_undo.add_do_method(sheet, "touch")
+	_undo.add_undo_method(sheet, "touch")
 	_undo.commit_action()
 	_view.select(null)
 
@@ -258,10 +262,8 @@ func _move_marker(m: CueMarker, from_t: float, to_t: float) -> void:
 	if state.sheet == null or _undo == null:
 		return
 	_undo.create_action("Cue:移动标记「%s」" % m.name, UndoRedo.MERGE_DISABLE, state.sheet)
-	_undo.add_do_property(m, "time", to_t)
-	_undo.add_undo_property(m, "time", from_t)
-	_undo.add_do_method(self, "_after_edit")
-	_undo.add_undo_method(self, "_after_edit")
+	_undo.add_do_method(state.sheet, "set_marker_time", m, to_t)
+	_undo.add_undo_method(state.sheet, "set_marker_time", m, from_t)
 	_undo.commit_action()
 
 
@@ -276,14 +278,13 @@ func _rename_marker(m: CueMarker, new_name: StringName) -> void:
 		push_error("Cue:已经有名为「%s」的标记了。同一个 sheet 内标记名必须唯一。" % new_name)
 		return
 	_undo.create_action("Cue:重命名标记「%s」" % m.name, UndoRedo.MERGE_DISABLE, state.sheet)
-	_undo.add_do_property(m, "name", new_name)
-	_undo.add_undo_property(m, "name", m.name)
-	_undo.add_do_method(self, "_after_edit")
-	_undo.add_undo_method(self, "_after_edit")
+	_undo.add_do_method(state.sheet, "set_marker_name", m, new_name)
+	_undo.add_undo_method(state.sheet, "set_marker_name", m, m.name)
 	_undo.commit_action()
 
 
-## do 和 undo 都会调它:排序缓存失效 + 重绘 + 标记未保存。
+## sheet 的 changed 信号处理器 —— do 和 undo 都会经过这里
+## (undo 动作里调的是 CueSheet.touch(),它发 changed)。
 func _after_edit() -> void:
 	_mark_dirty()
 	if state != null:

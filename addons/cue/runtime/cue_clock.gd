@@ -14,10 +14,17 @@ class_name CueClock extends RefCounted
 ## 允许测试强制指定模式:-1 = 自动检测,0 = 强制实时,1 = 强制离线。
 static var force_mode: int = -1
 
-## 某些平台上 [method AudioServer.get_output_latency] 返回 0
-## (4.7.2 实测:macOS headless + Dummy 驱动下为 0)。
-## 这里留一个手动偏移,单位秒,正值表示画面再提前一点。
-static var extra_latency: float = 0.0
+## 手动延迟偏移(秒)。负值表示"从项目设置读",这是默认行为。
+##
+## 4.7.2 实测:[method AudioServer.get_output_latency] 在 macOS 上用真实的
+## CoreAudio 驱动也返回 **0.0**(不只是 headless 的 Dummy 驱动),
+## 而 CoreAudio 实际输出延迟通常有 10~20ms。M2 要求播放头与声音偏差 < 1 帧
+## (33ms @30fps),白白吃掉一半余量。所以留这个手调项,
+## 对应 PLAN 第 7 节写的缓解措施。
+static var extra_latency: float = -1.0
+
+## 项目设置里的手调延迟,单位毫秒。由编辑器插件注册,运行时只读。
+const SETTING_EXTRA_LATENCY := "cue/playback/extra_latency_ms"
 
 var fps: float = 30.0
 var player: AudioStreamPlayer = null
@@ -37,10 +44,13 @@ func _init(p_fps: float = 30.0, p_player: AudioStreamPlayer = null) -> void:
 
 ## Movie Maker 模式检测。
 ##
-## 4.7.2 实测:[code]OS.has_feature("movie")[/code] 在普通运行下为 false;
-## 命令行里带 [code]--write-movie[/code] 时为 true(见 tests/probe)。
-## 仍然同时检查命令行参数作为兜底 —— 这个判断错了整集渲染才会暴露,
-## 多一层冗余远比事后重渲便宜。
+## 4.7.2 实测:[code]OS.has_feature("movie")[/code] 是**唯一**可靠的判据 ——
+## 普通运行下为 false,带 [code]--write-movie[/code] 时为 true。
+##
+## 注意:引擎会把 [code]--write-movie[/code] 从
+## [method OS.get_cmdline_args] 里[b]吃掉[/b](实测渲染时该数组只剩场景路径),
+## 所以下面那段命令行扫描在 4.7 上永远不会命中。留着只是防未来版本改行为,
+## 不要把它当成真正的兜底。
 static func detect_movie_mode() -> bool:
 	if force_mode >= 0:
 		return force_mode == 1
@@ -52,6 +62,27 @@ static func detect_movie_mode() -> bool:
 	return false
 
 
+## 帧计数源。
+##
+## 4.7.2 实测:[code]Engine.get_frames_drawn()[/code] 在 [code]--headless[/code]
+## 下[b]恒为 0[/b](dummy 渲染器什么都不画),用它的话运行时逻辑在 headless CLI
+## 里时钟是冻住的 —— 而 PLAN D9 要求 runtime/ 能在 headless 下跑。
+## [code]Engine.get_process_frames()[/code] 数的是主循环迭代次数,两种环境下都推进,
+## 且 Movie Maker 下一次迭代恰好对应一帧输出,确定性与 frames_drawn 等价
+## (tests/determinism.sh 两次渲染逐帧 SHA256 一致,已验证)。
+static func _frame_counter() -> int:
+	return Engine.get_process_frames()
+
+
+## 实际生效的手调延迟(秒)。
+static func extra_latency_seconds() -> float:
+	if extra_latency >= 0.0:
+		return extra_latency
+	if ProjectSettings.has_setting(SETTING_EXTRA_LATENCY):
+		return float(ProjectSettings.get_setting(SETTING_EXTRA_LATENCY)) * 0.001
+	return 0.0
+
+
 func is_movie_mode() -> bool:
 	return _movie
 
@@ -59,7 +90,7 @@ func is_movie_mode() -> bool:
 ## 从 [param from] 秒开始计时。
 func start(from: float = 0.0) -> void:
 	_start_offset = maxf(from, 0.0)
-	_start_frame = Engine.get_frames_drawn()
+	_start_frame = _frame_counter()
 	_frozen = _start_offset
 	_running = true
 
@@ -86,13 +117,13 @@ func now() -> float:
 		return _frozen
 	if _movie:
 		# 纯帧计数 —— 不读任何音频状态,因此是确定性的。
-		return _start_offset + float(Engine.get_frames_drawn() - _start_frame) / fps
+		return _start_offset + float(_frame_counter() - _start_frame) / fps
 	if player == null or not player.playing:
 		return _frozen
 	var t := player.get_playback_position()
 	t += AudioServer.get_time_since_last_mix()
 	t -= AudioServer.get_output_latency()
-	t -= extra_latency
+	t -= extra_latency_seconds()
 	return maxf(t, 0.0)
 
 

@@ -1,0 +1,219 @@
+extends SceneTree
+
+## 运行时 API(Cue / CueClock)的 headless 测试。
+##   /Applications/Godot.app/Contents/MacOS/Godot --headless --path . --script tests/test_runtime.gd
+##
+## 强制走 Movie 模式(帧计数时钟),这样时间完全由帧数决定,测试本身也是确定性的。
+##
+## 注意:GDScript 的 lambda [b]按值[/b]捕获局部变量(4.7.2 实测),
+## 所以协程里回传状态必须用 Array/Dictionary 这类引用类型,不能用 bool。
+
+const CueScript := preload("res://addons/cue/runtime/cue.gd")
+
+var _pass := 0
+var _fail := 0
+var _cue: Node = null
+
+
+func _init() -> void:
+	root.call_deferred("add_child", _make_cue())
+	_run.call_deferred()
+
+
+func _make_cue() -> Node:
+	_cue = CueScript.new()
+	_cue.name = "Cue"
+	return _cue
+
+
+func _run() -> void:
+	CueClock.force_mode = 1          # 强制帧计数时钟
+	await process_frame
+
+	await _test_clock()
+	await _test_at_ordering()
+	await _test_missing_marker_no_deadlock()
+	await _test_past_marker_returns_now()
+	await _test_stop_wakes_awaiters()
+	await _test_window_and_phonemes()
+	await _test_dense_markers_same_frame()
+
+	print("\n=== %d 通过 / %d 失败 ===" % [_pass, _fail])
+	quit(1 if _fail > 0 else 0)
+
+
+func ok(cond: bool, what: String) -> void:
+	if cond:
+		_pass += 1
+		print("  PASS  ", what)
+	else:
+		_fail += 1
+		print("  FAIL  ", what)
+
+
+func _sheet(times: Array, fps: int = 30) -> CueSheet:
+	var s := CueSheet.new()
+	s.fps = fps
+	for e in times:
+		var m := CueMarker.new(e[0], e[1], e[2] if e.size() > 2 else &"dialogue")
+		if e.size() > 3:
+			m.payload = e[3]
+		s.add_marker(m)
+	# 没有音频时 duration() 靠 waveform,这里手搓一个只带时长的缓存
+	var w := WaveformCache.new()
+	w.mins = PackedFloat32Array([0.0]); w.maxs = PackedFloat32Array([0.0])
+	w.mix_rate = 44100; w.duration = 10.0
+	s.waveform = w
+	return s
+
+
+## 推进 n 帧。Movie 模式下 1 帧 = 1/fps 秒,时间完全可预测。
+## (CueClock 数的是 Engine.get_process_frames(),headless 下也会推进。)
+func _advance(n: int) -> void:
+	for i in n:
+		await process_frame
+
+
+# ── CueClock ────────────────────────────────────────────────────────
+
+func _test_clock() -> void:
+	print("\n[CueClock] 帧计数时钟")
+	var c := CueClock.new(30.0, null)
+	ok(c.is_movie_mode(), "force_mode=1 时进入 Movie 模式")
+	c.start(0.0)
+	var f0 := Engine.get_process_frames()
+	await _advance(6)
+	var elapsed := Engine.get_process_frames() - f0
+	var expect := float(elapsed) / 30.0
+	ok(absf(c.now() - expect) < 1e-6,
+		"时间 = 帧数/fps(走了 %d 帧,now=%.6f,期望 %.6f)" % [elapsed, c.now(), expect])
+
+	# 同样的帧数必须给同样的时间 —— 这是离线渲染可复现的根本
+	var c2 := CueClock.new(30.0, null)
+	c2.start(0.0)
+	var a := c2.now()
+	var b := c2.now()
+	ok(a == b, "同一帧内连续读取返回同一个值(%f)" % a)
+
+	c.stop()
+	var frozen := c.now()
+	await _advance(3)
+	ok(c.now() == frozen, "stop() 之后时间冻结")
+	c.resume()
+	await _advance(2)
+	ok(c.now() > frozen, "resume() 之后继续走")
+
+	var c3 := CueClock.new(30.0, null)
+	ok(c3.frame_of(0.0) == 0, "frame_of(0)=0")
+	ok(c3.frame_of(1.0) == 30, "frame_of(1.0)=30")
+	ok(c3.frame_of(0.999) == 29, "frame_of(0.999)=29(向下取整)")
+
+	CueClock.force_mode = 0
+	ok(not CueClock.detect_movie_mode(), "force_mode=0 时强制实时模式")
+	CueClock.force_mode = 1
+
+
+# ── Cue.at() ────────────────────────────────────────────────────────
+
+func _test_at_ordering() -> void:
+	print("\n[Cue] at() 按时间顺序触发")
+	_cue.load_sheet(_sheet([[&"a", 0.1], [&"b", 0.25], [&"c", 0.4]]))
+	var order: Array[String] = []
+	var done: Array[bool] = [false]        # 按值捕获,用数组回传
+
+	var task := func() -> void:
+		await _cue.at(&"a"); order.append("a")
+		await _cue.at(&"b"); order.append("b")
+		await _cue.at(&"c"); order.append("c")
+		done[0] = true
+	task.call()
+
+	_cue.play(0.0)
+	for i in 40:
+		await process_frame
+		if done[0]:
+			break
+	ok(done[0], "三个标记都触发了")
+	ok(order == ["a", "b", "c"], "触发顺序 %s" % [order])
+	_cue.stop()
+
+
+func _test_missing_marker_no_deadlock() -> void:
+	print("\n[Cue] at() 对不存在的标记不死锁(M4 验收项)")
+	_cue.load_sheet(_sheet([[&"real", 0.1]]))
+	_cue.play(0.0)
+	var returned: Array[bool] = [false]
+	var task := func() -> void:
+		await _cue.at(&"根本没有这个标记")
+		returned[0] = true
+	task.call()
+	# 不推进帧也应该已经返回了 —— at() 找不到标记时是同步返回的
+	ok(returned[0], "立即返回,没有挂起")
+	_cue.stop()
+
+
+func _test_past_marker_returns_now() -> void:
+	print("\n[Cue] at() 对已经过去的标记立即返回")
+	_cue.load_sheet(_sheet([[&"early", 0.05], [&"late", 5.0]]))
+	_cue.play(2.0)            # 从 2 秒开始,early 已经过去
+	var returned: Array[bool] = [false]
+	var task := func() -> void:
+		await _cue.at(&"early")
+		returned[0] = true
+	task.call()
+	ok(returned[0], "已过去的标记立即返回")
+	_cue.stop()
+
+
+func _test_stop_wakes_awaiters() -> void:
+	print("\n[Cue] stop() 唤醒还挂着的 at()")
+	_cue.load_sheet(_sheet([[&"far", 9.0]]))
+	_cue.play(0.0)
+	var returned: Array[bool] = [false]
+	var task := func() -> void:
+		await _cue.at(&"far")
+		returned[0] = true
+	task.call()
+	await _advance(3)
+	ok(not returned[0], "标记还没到,协程仍在等待")
+	_cue.stop()
+	await _advance(2)
+	ok(returned[0], "stop() 之后协程被唤醒,不会永远挂着")
+
+
+func _test_window_and_phonemes() -> void:
+	print("\n[Cue] window() 与 phonemes()")
+	_cue.load_sheet(_sheet([
+		[&"w1", 1.0, &"dialogue"],
+		[&"m1", 1.2, &"mouth", {"phonemes": [{"t": 0.0, "shape": "A"}, {"t": 0.1, "shape": "E"}]}],
+		[&"w2", 2.5, &"dialogue"],
+		[&"m2", 3.0, &"mouth"],
+	]))
+	var w: Dictionary = _cue.window(&"w1")
+	ok(w["start"] == 1.0, "window.start = 标记自己的时间")
+	ok(w["end"] == 2.5, "window.end = 同轨下一个标记(得到 %s)" % w["end"])
+	var w2: Dictionary = _cue.window(&"m2")
+	ok(w2["end"] == 10.0, "同轨没有下一个时 end = 音频总长(得到 %s)" % w2["end"])
+
+	var ph: Array = _cue.phonemes(&"m1")
+	ok(ph.size() == 2, "读到 2 个音素")
+	ok(ph[0]["shape"] == "A", "第一个音素是 A")
+	ok(_cue.phonemes(&"w1").is_empty(), "没有 payload 的标记返回空数组")
+	ok(_cue.phonemes(&"不存在").is_empty(), "标记不存在时返回空数组而不是崩溃")
+	ok(_cue.markers_in(&"mouth").size() == 2, "markers_in 按轨过滤")
+
+
+func _test_dense_markers_same_frame() -> void:
+	print("\n[Cue] 一帧内跨过多个标记时全部补发")
+	# 30fps 下一帧是 33ms;这四个标记挤在 10ms 内,必然同帧
+	_cue.load_sheet(_sheet([[&"p0", 0.200], [&"p1", 0.203],
+			[&"p2", 0.206], [&"p3", 0.209]]))
+	var seen: Array[String] = []
+	_cue.marker_reached.connect(func(n: StringName) -> void:
+		if n != &"":
+			seen.append(String(n)))
+	_cue.play(0.0)
+	await _advance(15)
+	_cue.stop()
+	ok(seen.size() == 4, "四个密集标记全部触发(得到 %d 个:%s)" % [seen.size(), seen])
+	ok(seen == ["p0", "p1", "p2", "p3"], "补发顺序与时间顺序一致")

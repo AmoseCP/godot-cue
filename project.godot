@@ -21,6 +21,11 @@ Cue="*uid://cbco3i7ca0wsr"
 
 enabled=PackedStringArray("res://addons/cue/plugin.cfg")
 
+[editor]
+
+movie_writer/fps=30
+movie_writer/disable_vsync=true
+
 [rendering]
 
 renderer/rendering_method="gl_compatibility"
