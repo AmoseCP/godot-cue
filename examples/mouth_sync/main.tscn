@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://cuemouthsyncex"]
+
+[ext_resource type="Script" path="res://examples/mouth_sync/main.gd" id="1_mouth"]
+
+[node name="Main" type="Node2D"]
+script = ExtResource("1_mouth")

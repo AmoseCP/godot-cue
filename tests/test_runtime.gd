@@ -37,6 +37,8 @@ func _run() -> void:
 	await _test_stop_wakes_awaiters()
 	await _test_window_and_phonemes()
 	await _test_dense_markers_same_frame()
+	await _test_mouth_shape()
+	await _test_mouth_shape_payload()
 
 	print("\n=== %d 通过 / %d 失败 ===" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
@@ -49,6 +51,10 @@ func ok(cond: bool, what: String) -> void:
 	else:
 		_fail += 1
 		print("  FAIL  ", what)
+
+
+func eq(a: Variant, b: Variant, what: String) -> void:
+	ok(a == b, "%s (得到 %s,期望 %s)" % [what, a, b])
 
 
 func _sheet(times: Array, fps: int = 30) -> CueSheet:
@@ -217,3 +223,112 @@ func _test_dense_markers_same_frame() -> void:
 	_cue.stop()
 	ok(seen.size() == 4, "四个密集标记全部触发(得到 %d 个:%s)" % [seen.size(), seen])
 	ok(seen == ["p0", "p1", "p2", "p3"], "补发顺序与时间顺序一致")
+
+
+# ── CueMouthShape ───────────────────────────────────────────────────
+
+func _mouth_sheet() -> CueSheet:
+	# 一条 mouth 轨:X 闭嘴 → B → C → A → X
+	return _sheet([
+		[&"m0", 0.10, &"mouth", {"shape": "X"}],
+		[&"m1", 0.25, &"mouth", {"shape": "B"}],
+		[&"m2", 0.40, &"mouth", {"shape": "C"}],
+		[&"m3", 0.70, &"mouth", {"shape": "A"}],
+		[&"m4", 1.00, &"mouth", {"shape": "X"}],
+		[&"line", 0.05, &"dialogue"],
+	])
+
+
+func _test_mouth_shape() -> void:
+	print("\n[CueMouthShape] 从轨道读口型")
+	_cue.load_sheet(_mouth_sheet())
+	var mouth := CueMouthShape.new()
+	mouth.cue_path = _cue.get_path()
+	mouth.track = &"mouth"
+	mouth.rest_shape = &"X"
+	root.add_child(mouth)
+	await process_frame
+	mouth.rebuild()
+
+	ok(mouth.entry_count() == 5, "抓到 5 条口型(得到 %d)" % mouth.entry_count())
+	eq(String(mouth.shape_at(0.0)), "X", "序列开始前是静止嘴型")
+	eq(String(mouth.shape_at(0.09)), "X", "第一条之前仍是静止")
+	eq(String(mouth.shape_at(0.10)), "X", "正好踩在第一条上")
+	eq(String(mouth.shape_at(0.25)), "B", "正好踩在 B 上")
+	eq(String(mouth.shape_at(0.30)), "B", "两条之间保持前一个")
+	eq(String(mouth.shape_at(0.399)), "B", "边界前一刻还是 B")
+	eq(String(mouth.shape_at(0.40)), "C", "边界这一刻切到 C")
+	eq(String(mouth.shape_at(0.85)), "A", "区间中段")
+	eq(String(mouth.shape_at(99.0)), "X", "超出末尾保持最后一个")
+
+	# 纯函数:反复问同一个 t 必须给同样的答案
+	var stable := true
+	for i in 50:
+		if mouth.shape_at(0.517) != &"C":
+			stable = false
+	ok(stable, "shape_at() 是纯函数,重复调用结果稳定")
+
+	# 只在真正变化时才发信号
+	var fired: Array[String] = []
+	mouth.shape_changed.connect(func(sh: StringName) -> void: fired.append(String(sh)))
+	_cue.play(0.0)
+	await _advance(40)
+	_cue.stop()
+	ok(fired.size() >= 3, "播放过程中切换了 %d 次嘴型:%s" % [fired.size(), fired])
+	var no_repeat := true
+	for i in range(1, fired.size()):
+		if fired[i] == fired[i - 1]:
+			no_repeat = false
+	ok(no_repeat, "同一个嘴型不会连发两次")
+	mouth.queue_free()
+
+
+func _test_mouth_shape_payload() -> void:
+	print("\n[CueMouthShape] 从标记 payload 读口型序列")
+	var sheet := _sheet([
+		[&"line_1", 1.00, &"dialogue", {"phonemes": [
+			{"t": 0.00, "shape": "B"},
+			{"t": 0.20, "shape": "E"},
+			{"t": 0.45, "shape": "X"},
+		]}],
+	])
+	_cue.load_sheet(sheet)
+	var mouth := CueMouthShape.new()
+	mouth.cue_path = _cue.get_path()
+	mouth.source = CueMouthShape.Source.MARKER_PAYLOAD
+	mouth.marker = &"line_1"
+	root.add_child(mouth)
+	await process_frame
+	mouth.rebuild()
+
+	eq(mouth.entry_count(), 3, "抓到 3 条")
+	# payload 里的 t 是相对宿主标记的,所以要加上宿主时间 1.0
+	eq(String(mouth.shape_at(0.5)), "X", "宿主标记之前是静止嘴型")
+	eq(String(mouth.shape_at(1.00)), "B", "宿主时间点 → 第一个音素")
+	eq(String(mouth.shape_at(1.10)), "B", "还在第一个音素区间内")
+	eq(String(mouth.shape_at(1.20)), "E", "偏移 0.20 → E")
+	eq(String(mouth.shape_at(1.45)), "X", "偏移 0.45 → 闭嘴")
+
+	# 同时间平局必须按嘴型代号排,保证全序(确定性)
+	var tie := _sheet([
+		[&"h", 0.5, &"dialogue", {"phonemes": [
+			{"t": 0.1, "shape": "F"}, {"t": 0.1, "shape": "A"},
+		]}],
+	])
+	_cue.load_sheet(tie)
+	var m2 := CueMouthShape.new()
+	m2.cue_path = _cue.get_path()
+	m2.source = CueMouthShape.Source.MARKER_PAYLOAD
+	m2.marker = &"h"
+	root.add_child(m2)
+	await process_frame
+	m2.rebuild()
+	var first := m2.shape_at(0.6)
+	var same := true
+	for i in 20:
+		m2.rebuild()
+		if m2.shape_at(0.6) != first:
+			same = false
+	ok(same, "同时间的两个音素,排序结果每次都一样(全序)")
+	mouth.queue_free()
+	m2.queue_free()

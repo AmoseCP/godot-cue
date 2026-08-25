@@ -1,0 +1,133 @@
+{
+  "metadata": {
+    "duration": 4.0,
+    "soundFile": "voice.wav"
+  },
+  "mouthCues": [
+    {
+      "end": 0.3,
+      "start": 0.0,
+      "value": "X"
+    },
+    {
+      "end": 0.45,
+      "start": 0.3,
+      "value": "B"
+    },
+    {
+      "end": 0.6,
+      "start": 0.45,
+      "value": "D"
+    },
+    {
+      "end": 0.75,
+      "start": 0.6,
+      "value": "C"
+    },
+    {
+      "end": 0.85,
+      "start": 0.75,
+      "value": "X"
+    },
+    {
+      "end": 0.983,
+      "start": 0.85,
+      "value": "B"
+    },
+    {
+      "end": 1.117,
+      "start": 0.983,
+      "value": "C"
+    },
+    {
+      "end": 1.25,
+      "start": 1.117,
+      "value": "E"
+    },
+    {
+      "end": 1.45,
+      "start": 1.25,
+      "value": "X"
+    },
+    {
+      "end": 1.567,
+      "start": 1.45,
+      "value": "G"
+    },
+    {
+      "end": 1.683,
+      "start": 1.567,
+      "value": "C"
+    },
+    {
+      "end": 1.8,
+      "start": 1.683,
+      "value": "B"
+    },
+    {
+      "end": 2.1,
+      "start": 1.8,
+      "value": "X"
+    },
+    {
+      "end": 2.267,
+      "start": 2.1,
+      "value": "B"
+    },
+    {
+      "end": 2.433,
+      "start": 2.267,
+      "value": "D"
+    },
+    {
+      "end": 2.6,
+      "start": 2.433,
+      "value": "E"
+    },
+    {
+      "end": 2.8,
+      "start": 2.6,
+      "value": "X"
+    },
+    {
+      "end": 2.933,
+      "start": 2.8,
+      "value": "F"
+    },
+    {
+      "end": 3.067,
+      "start": 2.933,
+      "value": "C"
+    },
+    {
+      "end": 3.2,
+      "start": 3.067,
+      "value": "B"
+    },
+    {
+      "end": 3.35,
+      "start": 3.2,
+      "value": "X"
+    },
+    {
+      "end": 3.5,
+      "start": 3.35,
+      "value": "B"
+    },
+    {
+      "end": 3.65,
+      "start": 3.5,
+      "value": "D"
+    },
+    {
+      "end": 3.8,
+      "start": 3.65,
+      "value": "C"
+    },
+    {
+      "end": 4.0,
+      "start": 3.8,
+      "value": "X"
+    }
+  ]
+}
