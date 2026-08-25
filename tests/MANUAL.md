@@ -8,7 +8,8 @@ UI 交互和音画同步没法自动化。每个里程碑走一遍这份清单,
 - `tests/test_runtime.gd` —— `Cue` / `CueClock` / `CueMouthShape`(45 条)
 - `tests/test_import.gd` —— Rhubarb / TextGrid 解析(50 条)
 - `tests/test_lanes.gd` —— 轨道泳道几何与折叠(32 条)
-- `tests/edit_harness/` —— undo/redo、持久化、泳道交互(87 条,需在编辑器里跑)
+- `tests/test_export.gd` —— 振幅包络与剧本生成(63 条)
+- `tests/edit_harness/` —— undo/redo、持久化、泳道、包络、剧本(97 条,需在编辑器里跑)
 - `tests/toggle_harness/` —— 插件反复启停
 - `tests/determinism.sh` —— 双次渲染逐帧哈希比对
 
@@ -92,6 +93,18 @@ UI 交互和音画同步没法自动化。每个里程碑走一遍这份清单,
 - [ ] 换成自己的嘴型贴图(填 `shape_textures`)后仍然正常
 - [ ] 用 `AnimatedSprite2D` 且动画名为 A~H/X 时,也能正确切换
 - [ ] 跑 `tests/determinism.sh`,口型场景那一段也是 PASS
+
+## 振幅包络与剧本生成
+
+- [ ] 点「分析波形」后,Inspector 里显示「包络:N 点 @ 60Hz · 峰值 1.00」
+- [ ] 打开 `examples/mouth_sync/main.tscn`,右边那张脸(响度驱动)的嘴
+      跟着音量开合,底部包络曲线的波峰和嘴张开的时刻对得上
+- [ ] 换一段电平很低的配音,归一化之后阈值仍然管用(不需要重调)
+- [ ] `sheet.envelope.export_csv(...)` 导出后用表格打开,曲线形状和波形吻合
+- [ ] 工具栏点「生成剧本」,选个路径,生成的 `.gd` 在编辑器里**没有报错**
+- [ ] 生成的脚本挂到一个 Node2D 上按 F5,能跑到每个 `await` 而不卡住
+- [ ] 折叠 mouth 轨后再生成,口型标记**没有**出现在脚本里
+- [ ] 标记名里带引号或反斜杠时,生成的脚本仍然合法
 
 ## M5 导入器
 

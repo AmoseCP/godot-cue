@@ -98,6 +98,7 @@ Rhubarb JSON → 导入器 → `mouth` 轨 → `CueMouthShape` → `Sprite2D`。
 | 点轨道头的箭头 / 双击轨道头 | 折叠 / 展开该轨 |
 | 点轨道头的名字 | 设为「加标记」的目标轨 |
 | 工具栏的折叠 / 展开按钮 | 一次性折叠或展开所有轨 |
+| 工具栏「生成剧本」 | 把展开轨道的标记导出成 GDScript 骨架 |
 
 标记只能在**自己的泳道里**点选,波形区里点击一律是移动播放头 ——
 这样口型轨那种密集标记不会和定位操作互相抢点击。
@@ -126,6 +127,9 @@ Cue.window(marker) -> Dictionary   # {start, end},到同轨下一个标记
 Cue.phonemes(marker) -> Array      # [{t, shape}, ...] 口型序列
 Cue.markers_in(track) -> Array[CueMarker]
 Cue.is_movie_mode() -> bool
+
+Cue.amplitude(t := -1.0) -> float                 # 当前(或指定)时刻的响度 0..1
+Cue.amplitude_level(thresholds, t := -1.0) -> int # 按阈值分档
 
 signal Cue.marker_reached(marker_name: StringName)
 signal Cue.finished()
@@ -214,6 +218,11 @@ mouth.rebuild()                                   # load_sheet() 之后调
 # 方式二:读某个对白标记 payload 里的音素序列(时间相对该标记)
 mouth.source = CueMouthShape.Source.MARKER_PAYLOAD
 mouth.marker = &"peter_line_1"
+
+# 方式三:降级方案 —— 没有口型数据时按响度分档开合
+mouth.source = CueMouthShape.Source.AMPLITUDE
+mouth.amplitude_shapes = [&"X", &"B", &"C", &"D"]
+mouth.amplitude_thresholds = PackedFloat32Array([0.06, 0.18, 0.38])
 ```
 
 目标是 `AnimatedSprite2D` 时改用同名动画;不想用贴图就连 `shape_changed`
@@ -231,6 +240,75 @@ mouth.shape_changed.connect(func(shape: StringName) -> void:
 可运行示例:`examples/mouth_sync/main.tscn`
 
 ![口型示例](docs/mouth-example.png)
+
+---
+
+## 振幅包络:没有口型数据时的降级方案
+
+不是每段配音都跑得起 Rhubarb —— 临时录的、非英语的、赶工的。
+这时可以直接用**响度**驱动几档嘴型开合。明显比真口型同步糙,
+但零外部依赖,而且比嘴不动强太多。
+
+包络在点「分析波形」时**一并生成**,不需要额外操作(它是从峰值缓存推出来的,
+瞬时完成)。生成后会自动归一化到峰值 1,这样阈值不必逐个素材重调。
+
+```gdscript
+Cue.amplitude()                    # 当前时刻响度 0..1
+Cue.amplitude_level(PackedFloat32Array([0.06, 0.18, 0.38]))   # → 0/1/2/3 档
+
+# 直接驱动嘴型:
+mouth.source = CueMouthShape.Source.AMPLITUDE
+```
+
+也能导给外部工具(在 Blender / AE 里做同样的驱动):
+
+```gdscript
+sheet.envelope.export_json("res://out/env.json")   # {rate, duration, count, values}
+sheet.envelope.export_csv("res://out/env.csv")     # time,amplitude
+```
+
+`envelope.at(t)` 是纯函数,所以拿它驱动动画同样不破坏离线渲染的确定性。
+
+`examples/mouth_sync/main.tscn` 里左右两张脸就是这两种方式的对照。
+
+---
+
+## 从标记生成剧本骨架
+
+标记打完之后,工具栏点「生成剧本」,直接得到一串 `await`:
+
+```gdscript
+extends Node2D
+
+## 由 Cue 生成 —— 6 个标记,30 fps。
+## 来源:res://examples/hello_cue/shot_01.tres
+
+const SHEET := preload("res://examples/hello_cue/shot_01.tres")
+
+
+func _ready() -> void:
+	Cue.load_sheet(SHEET)
+	Cue.play()
+	_shot()
+
+
+func _shot() -> void:
+	# 0.300s / f9  [action]
+	await Cue.at(&"peter_enters")
+	# TODO
+
+	# 0.850s / f26  [dialogue]
+	await Cue.at(&"peter_line_1")
+	# TODO
+```
+
+省掉手抄标记名的环节,也就没有抄错名字导致运行时 `push_error` 的机会。
+
+**折叠掉的轨道不会进剧本** —— 折叠一条轨等于"这条我现在不关心",
+口型轨那几百个标记尤其不该出现在分镜脚本里。
+
+生成的是**骨架**,重新生成会覆盖整个文件。自定义逻辑写在别的脚本里,
+或者生成一次之后就当普通脚本手工维护。
 
 ---
 
@@ -280,7 +358,10 @@ addons/cue/
 │   ├── cue_track.gd                # 轨道元数据
 │   ├── waveform_cache.gd           # 预计算峰值 + 哈希失效检测
 │   ├── pcm_reader.gd               # RIFF 解析 + 格式校验
-│   └── waveform_builder.gd         # 分块峰值计算
+│   ├── waveform_builder.gd         # 分块峰值计算
+│   ├── cue_envelope.gd             # 振幅包络 + JSON/CSV 导出
+│   ├── envelope_builder.gd         # 从峰值缓存推包络
+│   └── script_generator.gd         # 标记 → GDScript 骨架
 ├── editor/                         # 只在编辑器里跑
 │   ├── cue_panel.gd/.tscn          # 底部面板,唯一执行编辑的地方
 │   ├── waveform_view.gd            # 波形 + 轨道泳道的绘制与交互
@@ -328,10 +409,11 @@ tests/determinism.sh             # 只跑双次渲染哈希比对
 | 套件 | 覆盖 | 断言数 |
 |---|---|---|
 | `tests/test_core.gd` | PCM 解码、峰值、缓存、排序、吸附、绘制性能 | 69 |
-| `tests/test_runtime.gd` | `Cue` / `CueClock` / `CueMouthShape`、`at()` 边界 | 45 |
+| `tests/test_runtime.gd` | `Cue` / `CueClock` / `CueMouthShape`、`at()` 边界 | 58 |
 | `tests/test_import.gd` | Rhubarb / TextGrid 解析 | 50 |
 | `tests/test_lanes.gd` | 轨道泳道几何、折叠、命中测试 | 32 |
-| `tests/edit_harness/` | undo/redo、持久化、批量导入、泳道交互(需编辑器) | 87 |
+| `tests/test_export.gd` | 振幅包络、剧本生成(含生成代码真编译一遍) | 63 |
+| `tests/edit_harness/` | undo/redo、持久化、导入、泳道、包络、剧本(需编辑器) | 97 |
 | `tests/toggle_harness/` | 插件反复启停无泄漏(需编辑器) | 10 轮 |
 | `tests/determinism.sh` | 两个场景双次渲染逐帧 SHA256 | 91 + 121 帧 |
 
