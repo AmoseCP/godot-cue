@@ -77,6 +77,12 @@ theme.get_font("font", "Editor")
 
 另外:**`EditorInterface.save_resource()` 不存在**,用 `ResourceSaver.save()`。
 
+**图标名要逐个实测。** `has_icon(name, "EditorIcons")` 实测:
+`Load` / `Save` / `MainPlay` / `Pause` / `Stop` / `Add` / `AudioStreamPlayer` /
+`ZoomLess` / `ZoomMore` / `CollapseTree` / `ExpandTree` / `GuiTreeArrowDown` /
+`GuiTreeArrowRight` / `AnimationTrackList` 都存在,但 **`AssetLib` 不存在**。
+猜一个名字然后静默拿到空图标是很容易发生的事。
+
 ---
 
 ## 4. `EditorUndoRedoManager` 的历史归属会按对象类型分裂
@@ -157,7 +163,29 @@ CoreAudio 实际输出延迟通常有 10~20ms,这部分**不会**被自动补偿
 
 ---
 
-## 8. GDScript 的 lambda 按值捕获局部变量
+## 8. 插件脚本里不能直接引用自动加载的全局标识符
+
+插件的脚本扫描早于自动加载注册,所以在 `addons/` 下的脚本里直接写
+
+```gdscript
+var t := Cue.time()      # Cue 是自动加载
+```
+
+会在**全新项目**(没有 `.godot/` 全局类缓存)里报
+`Parse Error: Cannot infer the type ...`。本地开发不会暴露,因为缓存已经建好了。
+
+两种写法都安全:
+
+```gdscript
+var t: float = Cue.time()                      # 显式标注类型
+# 或者干脆不引用全局名:
+@export var cue_path: NodePath = ^"/root/Cue"
+var cue := get_node_or_null(cue_path)
+```
+
+---
+
+## 9. GDScript 的 lambda 按值捕获局部变量
 
 ```gdscript
 var flag := false
@@ -175,7 +203,7 @@ lam.call()
 
 ---
 
-## 9. 进程退出时带活跃 WAV 播放会报"资源仍在使用"
+## 10. 进程退出时带活跃 WAV 播放会报"资源仍在使用"
 
 ```
 WARNING: 2 ObjectDB instances were leaked at exit.

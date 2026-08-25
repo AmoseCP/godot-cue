@@ -5,8 +5,10 @@ UI 交互和音画同步没法自动化。每个里程碑走一遍这份清单,
 
 自动化部分见:
 - `tests/test_core.gd` —— PCM 解码、峰值、缓存、排序、吸附(69 条)
-- `tests/test_runtime.gd` —— `Cue` / `CueClock` 运行时 API(25 条)
-- `tests/edit_harness/` —— undo/redo 与持久化(72 条,需在编辑器里跑)
+- `tests/test_runtime.gd` —— `Cue` / `CueClock` / `CueMouthShape`(45 条)
+- `tests/test_import.gd` —— Rhubarb / TextGrid 解析(50 条)
+- `tests/test_lanes.gd` —— 轨道泳道几何与折叠(32 条)
+- `tests/edit_harness/` —— undo/redo、持久化、泳道交互(87 条,需在编辑器里跑)
 - `tests/toggle_harness/` —— 插件反复启停
 - `tests/determinism.sh` —— 双次渲染逐帧哈希比对
 
@@ -70,6 +72,26 @@ UI 交互和音画同步没法自动化。每个里程碑走一遍这份清单,
 - [ ] 跑 `tests/determinism.sh`,输出 `PASS`
 - [ ] 在真实场景里 `await Cue.at(&"某标记")`,动作在听到对应声音时发生
 - [ ] 故意 `await Cue.at(&"不存在的名字")` → 输出面板报中文错误,**场景不卡死**
+
+## 多轨与折叠
+
+- [ ] 导入口型数据后,左边出现 `mouth` 轨道头,标记画在自己的泳道里
+- [ ] 点轨道头的箭头,该轨折叠成细带,下面的轨道往上顶,**轨道头和泳道不错位**
+- [ ] 再点一次展开,恢复原位
+- [ ] 工具栏的折叠/展开按钮一次性作用于所有轨
+- [ ] 点轨道头的名字,该轨高亮;此时按 `M` 加的标记落在这条轨上
+- [ ] 在波形区(泳道下方)点击 → 移动播放头,**不会**误选标记
+- [ ] 在泳道里点标记 → 选中;不同轨上时间相近的标记不会互相抢点击
+- [ ] 折叠若干轨道后点「保存」,再用 git diff 看 `.tres` —— **折叠状态不该出现在里面**
+- [ ] 轨道很多时(比如 6 条以上)泳道不会把波形挤没
+
+## 口型(CueMouthShape)
+
+- [ ] 打开 `examples/mouth_sync/main.tscn`,按 F5,嘴型跟着声音动
+- [ ] 嘴型切换看起来和音节对得上,没有系统性提前/滞后
+- [ ] 换成自己的嘴型贴图(填 `shape_textures`)后仍然正常
+- [ ] 用 `AnimatedSprite2D` 且动画名为 A~H/X 时,也能正确切换
+- [ ] 跑 `tests/determinism.sh`,口型场景那一段也是 PASS
 
 ## M5 导入器
 

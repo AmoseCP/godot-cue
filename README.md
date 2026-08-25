@@ -64,6 +64,9 @@ cd godot-cue
 点「打开」选 `examples/hello_cue/shot_01.tres`,就能看到波形和标记。
 拖动任意一个标记再按 F5 —— 动作时间点跟着变了。
 
+另一个示例 `examples/mouth_sync/main.tscn` 展示完整的口型链路:
+Rhubarb JSON → 导入器 → `mouth` 轨 → `CueMouthShape` → `Sprite2D`。
+
 ### 用在自己的项目里
 
 1. 把配音 `.wav` 放进项目(**16-bit PCM**,见下方「音频格式」)
@@ -92,6 +95,12 @@ cd godot-cue
 | `Ctrl` + 滚轮 | 快速缩放 |
 | 中键拖动 | 平移 |
 | `Ctrl+Z` / `Ctrl+Y` | 撤销 / 重做 |
+| 点轨道头的箭头 / 双击轨道头 | 折叠 / 展开该轨 |
+| 点轨道头的名字 | 设为「加标记」的目标轨 |
+| 工具栏的折叠 / 展开按钮 | 一次性折叠或展开所有轨 |
+
+标记只能在**自己的泳道里**点选,波形区里点击一律是移动播放头 ——
+这样口型轨那种密集标记不会和定位操作互相抢点击。
 
 **所有编辑操作都走 `EditorUndoRedoManager`**,包括批量导入 ——
 导入 200 个口型标记后按一次 `Ctrl+Z` 就全部撤销。
@@ -173,6 +182,58 @@ tests/determinism.sh
 
 ---
 
+## 多轨与折叠
+
+每条轨道在波形上方占一条泳道,左边是轨道头(名字、颜色、标记数)。
+标记画在自己的泳道里,并向下引一条辅助线穿过波形,方便对到具体的音上。
+
+口型轨动辄几百个标记,全部展开会淹掉对白轨。点轨道头的箭头把它折叠成一条细带 ——
+仍然看得见标记密度,但不占地方。
+
+**折叠状态不写进 `.tres`。** 它是视图状态,存进资源只会让一次 UI 折叠
+产生一条 git diff,还得为它走一遍 undo。代价是重开项目后折叠状态会重置。
+
+轨道列表 = `tracks` 里声明过的(按声明顺序)+ 只在标记里出现过的(补在后面),
+所以手写 `.tres` 时不声明 `CueTrack` 也能正常显示,只是没有自定义颜色。
+
+---
+
+## 口型同步:CueMouthShape
+
+`CueMouthShape` 把口型数据变成实际的嘴型切换。两种数据来源:
+
+```gdscript
+# 方式一:直接读一条口型轨(Rhubarb 导入器默认产出这种)
+var mouth := CueMouthShape.new()
+mouth.track = &"mouth"
+mouth.sprite = $Peter/Mouth                      # Sprite2D / TextureRect
+mouth.shape_textures = {&"A": tex_a, &"B": tex_b, ...}
+add_child(mouth)
+mouth.rebuild()                                   # load_sheet() 之后调
+
+# 方式二:读某个对白标记 payload 里的音素序列(时间相对该标记)
+mouth.source = CueMouthShape.Source.MARKER_PAYLOAD
+mouth.marker = &"peter_line_1"
+```
+
+目标是 `AnimatedSprite2D` 时改用同名动画;不想用贴图就连 `shape_changed`
+自己画:
+
+```gdscript
+mouth.shape_changed.connect(func(shape: StringName) -> void:
+    $Mouth.frame = SHAPE_TO_FRAME[shape])
+```
+
+**核心是 `shape_at(t)` 是时间的纯函数** —— 不累加 delta、不记忆上一帧。
+所以拖动播放头能正确预览,离线渲染两次结果一致
+(`tests/determinism.sh` 把口型示例也纳入了逐帧哈希比对)。
+
+可运行示例:`examples/mouth_sync/main.tscn`
+
+![口型示例](docs/mouth-example.png)
+
+---
+
 ## 口型同步导入
 
 面板工具栏的「导入」支持两种对齐工具的输出:
@@ -222,13 +283,15 @@ addons/cue/
 │   └── waveform_builder.gd         # 分块峰值计算
 ├── editor/                         # 只在编辑器里跑
 │   ├── cue_panel.gd/.tscn          # 底部面板,唯一执行编辑的地方
-│   ├── waveform_view.gd            # 绘制与交互
+│   ├── waveform_view.gd            # 波形 + 轨道泳道的绘制与交互
+│   ├── track_headers.gd            # 左侧轨道头,折叠开关
 │   ├── ruler.gd  transport.gd
-│   ├── cue_view_state.gd           # 共享视图状态
+│   ├── cue_view_state.gd           # 共享视图状态 + 泳道几何
 │   └── inspector_plugin.gd
 ├── runtime/                        # 不依赖编辑器,可导出、可 headless
 │   ├── cue.gd                      # Autoload 单例
-│   └── cue_clock.gd                # 双模时间源
+│   ├── cue_clock.gd                # 双模时间源
+│   └── mouth_shape.gd              # 口型数据 → 嘴型切换
 └── import/
     ├── rhubarb_importer.gd
     ├── textgrid_importer.gd
@@ -265,11 +328,12 @@ tests/determinism.sh             # 只跑双次渲染哈希比对
 | 套件 | 覆盖 | 断言数 |
 |---|---|---|
 | `tests/test_core.gd` | PCM 解码、峰值、缓存、排序、吸附、绘制性能 | 69 |
-| `tests/test_runtime.gd` | `Cue` / `CueClock`、`at()` 边界 | 25 |
+| `tests/test_runtime.gd` | `Cue` / `CueClock` / `CueMouthShape`、`at()` 边界 | 45 |
 | `tests/test_import.gd` | Rhubarb / TextGrid 解析 | 50 |
-| `tests/edit_harness/` | undo/redo、持久化、批量导入(需编辑器) | 80 |
+| `tests/test_lanes.gd` | 轨道泳道几何、折叠、命中测试 | 32 |
+| `tests/edit_harness/` | undo/redo、持久化、批量导入、泳道交互(需编辑器) | 87 |
 | `tests/toggle_harness/` | 插件反复启停无泄漏(需编辑器) | 10 轮 |
-| `tests/determinism.sh` | 双次渲染逐帧 SHA256 | 91 帧 |
+| `tests/determinism.sh` | 两个场景双次渲染逐帧 SHA256 | 91 + 121 帧 |
 
 UI 交互无法自动化,清单见 [`tests/MANUAL.md`](tests/MANUAL.md)。
 
