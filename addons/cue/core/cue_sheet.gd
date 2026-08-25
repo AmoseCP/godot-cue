@@ -159,6 +159,29 @@ func snap(t: float) -> float:
 	return round(t * float(fps)) / float(fps)
 
 
+## 本 sheet 涉及的所有轨道名,有序:先按 [member tracks] 的声明顺序,
+## 再补上只在标记里出现、但没有声明 CueTrack 的轨道(手写 .tres 时很常见)。
+func track_names() -> Array[StringName]:
+	var out: Array[StringName] = []
+	for t in tracks:
+		if t != null and not out.has(t.name):
+			out.append(t.name)
+	for m in sorted():
+		if not out.has(m.track):
+			out.append(m.track)
+	if out.is_empty():
+		out.append(&"dialogue")
+	return out
+
+
+func count_in_track(track_name: StringName) -> int:
+	var n := 0
+	for m in markers:
+		if m != null and m.track == track_name:
+			n += 1
+	return n
+
+
 func track_color(track_name: StringName, fallback: Color) -> Color:
 	for t in tracks:
 		if t != null and t.name == track_name:

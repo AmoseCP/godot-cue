@@ -10,6 +10,7 @@ signal play_pause_requested()
 signal stop_requested()
 signal analyze_requested()
 signal import_requested()
+signal collapse_all_requested(collapsed: bool)
 signal zoom_in_requested()
 signal zoom_out_requested()
 signal zoom_fit_requested()
@@ -78,12 +79,18 @@ func _build() -> void:
 		snap_toggled.emit(on))
 	add_child(_snap_check)
 
+	var fold_btn := _button("", "CollapseTree", "折叠所有轨道")
+	fold_btn.pressed.connect(func() -> void: collapse_all_requested.emit(true))
+	var unfold_btn := _button("", "ExpandTree", "展开所有轨道")
+	unfold_btn.pressed.connect(func() -> void: collapse_all_requested.emit(false))
+
 	add_child(VSeparator.new())
 
 	_analyze_btn = _button("分析波形", "AudioStreamPlayer", "读取音频并重建峰值缓存")
 	_analyze_btn.pressed.connect(func() -> void: analyze_requested.emit())
 
-	var imp_btn := _button("导入", "AssetLib", "导入 Rhubarb JSON 或 MFA TextGrid")
+	# 4.7.2 实测编辑器主题里没有 "AssetLib" 图标,用 "AnimationTrackList"
+	var imp_btn := _button("导入", "AnimationTrackList", "导入 Rhubarb JSON 或 MFA TextGrid")
 	imp_btn.pressed.connect(func() -> void: import_requested.emit())
 
 	_progress = ProgressBar.new()

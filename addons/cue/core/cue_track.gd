@@ -13,8 +13,9 @@ class_name CueTrack extends Resource
 		color = v
 		emit_changed()
 
-## 折叠状态由编辑器面板读写,不参与运行时逻辑。
-@export var collapsed: bool = false
+# 注意:折叠状态[b]不[/b]存在这里。它是纯视图状态,存进 .tres 只会让
+# 一次 UI 折叠产生一条 git diff,而且得为它走一遍 undo。
+# 实际存放位置是 CueViewState。
 
 
 func _init(p_name: StringName = &"dialogue", p_color: Color = Color(0.4, 0.7, 1.0)) -> void:

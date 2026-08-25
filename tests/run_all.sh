@@ -67,6 +67,7 @@ fi
 run_script "核心(PCM / 峰值 / 缓存 / 排序 / 吸附)" tests/test_core.gd
 run_script "运行时(Cue / CueClock)"                tests/test_runtime.gd
 run_script "导入器(Rhubarb / TextGrid)"            tests/test_import.gd
+run_script "轨道泳道几何与折叠"                     tests/test_lanes.gd
 
 run_harness "编辑器:插件反复启停无泄漏" \
 	"res://tests/toggle_harness/plugin.cfg" TOGGLE 500
@@ -75,7 +76,7 @@ run_harness "编辑器:undo / redo / 持久化 / 批量导入" \
 
 hr "确定性:双次渲染逐帧哈希"
 if ./tests/determinism.sh "$GODOT" > "$TMP/out" 2>&1; then
-	tail -1 "$TMP/out" | sed 's/^/  /'
+	grep -E "PASS:|确定性测试" "$TMP/out" | sed 's/^/  /'
 else
 	sed 's/^/  /' "$TMP/out"
 	FAIL=1

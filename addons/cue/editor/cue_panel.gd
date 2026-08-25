@@ -13,6 +13,7 @@ var _undo: EditorUndoRedoManager = null
 var _transport: CueTransport = null
 var _ruler: CueRuler = null
 var _view: CueWaveformView = null
+var _headers: CueTrackHeaders = null
 var _hscroll: HScrollBar = null
 var _player: AudioStreamPlayer = null
 var _clock: CueClock = null
@@ -36,18 +37,45 @@ func _ready() -> void:
 	_transport.setup(state)
 	add_child(_transport)
 
+	# 标尺行:左边留一块和轨道头等宽的空白,这样标尺的 0 秒
+	# 和波形的 0 秒在同一条竖线上。
+	var ruler_row := HBoxContainer.new()
+	ruler_row.add_theme_constant_override("separation", 0)
+	add_child(ruler_row)
+	var ruler_gutter := Control.new()
+	ruler_gutter.custom_minimum_size.x = CueTrackHeaders.WIDTH
+	ruler_row.add_child(ruler_gutter)
+
 	_ruler = CueRuler.new()
 	_ruler.setup(state)
-	add_child(_ruler)
+	_ruler.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	ruler_row.add_child(_ruler)
+
+	var body := HBoxContainer.new()
+	body.add_theme_constant_override("separation", 0)
+	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	add_child(body)
+
+	_headers = CueTrackHeaders.new()
+	_headers.setup(state)
+	body.add_child(_headers)
 
 	_view = CueWaveformView.new()
 	_view.setup(state)
+	_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	add_child(_view)
+	body.add_child(_view)
 
+	var scroll_row := HBoxContainer.new()
+	scroll_row.add_theme_constant_override("separation", 0)
+	add_child(scroll_row)
+	var scroll_gutter := Control.new()
+	scroll_gutter.custom_minimum_size.x = CueTrackHeaders.WIDTH
+	scroll_row.add_child(scroll_gutter)
 	_hscroll = HScrollBar.new()
+	_hscroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_hscroll.visible = false
-	add_child(_hscroll)
+	scroll_row.add_child(_hscroll)
 
 	_player = AudioStreamPlayer.new()
 	_player.name = "PreviewPlayer"
@@ -67,6 +95,7 @@ func _ready() -> void:
 	_transport.stop_requested.connect(_stop)
 	_transport.analyze_requested.connect(analyze_waveform)
 	_transport.import_requested.connect(_import_dialog_show)
+	_transport.collapse_all_requested.connect(func(v: bool) -> void: state.set_all_collapsed(v))
 	_transport.add_marker_requested.connect(func() -> void: _add_marker(state.maybe_snap(state.playhead)))
 	_transport.zoom_in_requested.connect(func() -> void: state.zoom_at(1.4, size.x * 0.5))
 	_transport.zoom_out_requested.connect(func() -> void: state.zoom_at(1.0 / 1.4, size.x * 0.5))
@@ -111,6 +140,8 @@ func open_sheet(sheet: CueSheet) -> void:
 	_dirty = false
 	_transport.set_dirty(false)
 	if sheet != null:
+		var names := sheet.track_names()
+		state.active_track = names[0]
 		state.zoom_fit()
 		if sheet.waveform == null or not sheet.waveform.is_valid():
 			analyze_waveform()
@@ -235,7 +266,10 @@ func _add_marker(t: float) -> void:
 	var sheet := state.sheet
 	if sheet == null or _undo == null:
 		return
-	var m := CueMarker.new(sheet.unique_name(&"cue"), t)
+	var track := state.active_track
+	if track == &"" or not sheet.track_names().has(track):
+		track = sheet.track_names()[0]
+	var m := CueMarker.new(sheet.unique_name(StringName(String(track))), t, track)
 	_undo.create_action("Cue:添加标记", UndoRedo.MERGE_DISABLE, sheet)
 	_undo.add_do_method(sheet, "add_marker", m)
 	_undo.add_undo_method(sheet, "remove_marker", m)

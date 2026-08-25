@@ -162,6 +162,45 @@ func _run() -> void:
 	_ok(sheet.validate().is_empty(), "重复导入仍无重名:%s" % sheet.validate())
 	_ok(sheet.markers.size() == n_before + 24, "两次导入共 24 个口型标记")
 
+	# ── 轨道泳道与折叠 ──────────────────────────────────────────────
+	var st = panel.state
+	var lanes: Array = st.track_list()
+	_ok(lanes.has(&"mouth"), "导入后 mouth 轨出现在泳道列表里:%s" % [lanes])
+
+	# 加标记要落在「活动轨」上,而不是永远 dialogue
+	st.set_active_track(&"mouth")
+	var before_mouth: int = sheet.count_in_track(&"mouth")
+	panel.call("_add_marker", 0.42)
+	panel.call("_cancel_rename")
+	await get_tree().process_frame
+	_ok(sheet.count_in_track(&"mouth") == before_mouth + 1,
+		"活动轨是 mouth 时,新标记落在 mouth 轨")
+	ur.undo()
+	await get_tree().process_frame
+	_ok(sheet.count_in_track(&"mouth") == before_mouth, "撤销后回到原样")
+
+	# 折叠会改变泳道几何,轨道头和波形视图必须读到同一份
+	var full: float = st.lanes_height()
+	st.set_collapsed(&"mouth", true)
+	await get_tree().process_frame
+	_ok(st.lanes_height() < full, "折叠后泳道总高变小(%.0f → %.0f)" % [full, st.lanes_height()])
+	_ok(st.lane_at(st.lane_top(1) + 1.0) == lanes[1], "折叠后 lane_at 仍能反查到第 1 条")
+	st.set_all_collapsed(false)
+	await get_tree().process_frame
+	_ok(is_equal_approx(st.lanes_height(), full), "全部展开后恢复原高")
+
+	# 折叠状态不能写进资源 —— 折一下 UI 不该让 .tres 变脏。
+	# 先存一次把之前的编辑落盘,否则比的是"那些编辑",不是折叠。
+	panel.call("save_sheet")
+	await get_tree().process_frame
+	var tres_before := FileAccess.get_file_as_string(SHEET_PATH)
+	st.set_collapsed(&"dialogue", true)
+	panel.call("save_sheet")
+	await get_tree().process_frame
+	var tres_after := FileAccess.get_file_as_string(SHEET_PATH)
+	_ok(tres_before == tres_after, "折叠不会改变 .tres 内容(折叠是视图状态)")
+	st.set_all_collapsed(false)
+
 	panel.queue_free()
 	print("EDIT RESULT ", "PASS" if _fail == 0 else "FAIL", "  %d 通过 / %d 失败" % [_pass, _fail])
 

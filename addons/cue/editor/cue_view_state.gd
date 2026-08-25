@@ -7,9 +7,15 @@ class_name CueViewState extends RefCounted
 signal view_changed()          ## 缩放或滚动变了
 signal sheet_changed()         ## 换了 sheet,或 sheet 内容被编辑
 signal playhead_moved()
+signal lanes_changed()         ## 轨道折叠状态或活动轨道变了
 
 const MIN_PX_PER_SEC := 2.0
 const MAX_PX_PER_SEC := 24000.0
+
+## 展开时一条轨道泳道的高度。
+const LANE_H := 22.0
+## 折叠时的高度 —— 仍然留一条能看见标记密度的细带,而不是完全消失。
+const LANE_H_COLLAPSED := 9.0
 
 var sheet: CueSheet = null
 var px_per_sec: float = 100.0
@@ -18,6 +24,12 @@ var scroll_sec: float = 0.0
 var playhead: float = 0.0
 var snap_to_frame: bool = false
 var view_width: float = 1000.0
+## 按 M 加标记时落在哪条轨上。
+var active_track: StringName = &"dialogue"
+
+## 轨道名 → 是否折叠。刻意[b]不[/b]存进资源:折叠是视图状态,
+## 写进 .tres 会让一次 UI 折叠产生 git diff,还得为它走 undo。
+var _collapsed: Dictionary = {}
 
 
 func set_sheet(s: CueSheet) -> void:
@@ -36,6 +48,75 @@ func notify_sheet_edited() -> void:
 
 func duration() -> float:
 	return sheet.duration() if sheet != null else 0.0
+
+
+# ── 轨道泳道 ────────────────────────────────────────────────────────
+# 泳道几何放在这里,是为了让轨道头和波形视图读的是[b]同一份[/b]数字。
+# 两边各算一遍必然会错位。
+
+func track_list() -> Array[StringName]:
+	if sheet == null:
+		return []
+	return sheet.track_names()
+
+
+func is_collapsed(track_name: StringName) -> bool:
+	return _collapsed.get(track_name, false)
+
+
+func set_collapsed(track_name: StringName, v: bool) -> void:
+	if is_collapsed(track_name) == v:
+		return
+	_collapsed[track_name] = v
+	lanes_changed.emit()
+
+
+func toggle_collapsed(track_name: StringName) -> void:
+	set_collapsed(track_name, not is_collapsed(track_name))
+
+
+func set_all_collapsed(v: bool) -> void:
+	for n in track_list():
+		_collapsed[n] = v
+	lanes_changed.emit()
+
+
+func set_active_track(track_name: StringName) -> void:
+	if active_track == track_name:
+		return
+	active_track = track_name
+	lanes_changed.emit()
+
+
+func lane_height(track_name: StringName) -> float:
+	return LANE_H_COLLAPSED if is_collapsed(track_name) else LANE_H
+
+
+## 第 [param index] 条泳道的顶部 y(相对泳道区起点)。
+func lane_top(index: int) -> float:
+	var y := 0.0
+	var names := track_list()
+	for i in mini(index, names.size()):
+		y += lane_height(names[i])
+	return y
+
+
+func lanes_height() -> float:
+	var y := 0.0
+	for n in track_list():
+		y += lane_height(n)
+	return y
+
+
+## 落在 [param y](相对泳道区起点)上的轨道名;不在任何泳道内返回空。
+func lane_at(y: float) -> StringName:
+	var acc := 0.0
+	for n in track_list():
+		var h := lane_height(n)
+		if y >= acc and y < acc + h:
+			return n
+		acc += h
+	return &""
 
 
 func time_to_x(t: float) -> float:
