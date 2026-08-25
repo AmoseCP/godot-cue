@@ -68,6 +68,7 @@ run_script "核心(PCM / 峰值 / 缓存 / 排序 / 吸附)" tests/test_core.gd
 run_script "运行时(Cue / CueClock)"                tests/test_runtime.gd
 run_script "导入器(Rhubarb / TextGrid)"            tests/test_import.gd
 run_script "轨道泳道几何与折叠"                     tests/test_lanes.gd
+run_script "振幅包络与剧本骨架生成"                 tests/test_export.gd
 
 run_harness "编辑器:插件反复启停无泄漏" \
 	"res://tests/toggle_harness/plugin.cfg" TOGGLE 500

@@ -201,6 +201,48 @@ func _run() -> void:
 	_ok(tres_before == tres_after, "折叠不会改变 .tres 内容(折叠是视图状态)")
 	st.set_all_collapsed(false)
 
+	# ── 振幅包络随「分析波形」一起生成 ──────────────────────────────
+	await panel.call("analyze_waveform")
+	await get_tree().process_frame
+	var env: CueEnvelope = sheet.envelope
+	_ok(env != null and env.is_valid(), "分析波形时顺带生成了振幅包络")
+	if env != null and env.is_valid():
+		_ok(absf(env.peak() - 1.0) < 0.02, "包络已归一化(峰值 %.3f)" % env.peak())
+		_ok(env.count() > 0 and absf(env.duration - sheet.waveform.duration) < 0.05,
+			"包络时长与波形一致(%.2f vs %.2f)" % [env.duration, sheet.waveform.duration])
+		_ok(env.source_hash == sheet.waveform.source_hash, "包络与波形用同一个音频哈希")
+		# 纯函数
+		var a1 := env.at(0.37)
+		var same := true
+		for i in 20:
+			if not is_equal_approx(env.at(0.37), a1):
+				same = false
+		_ok(same, "envelope.at() 在编辑器里也是纯函数")
+
+	# ── 剧本骨架:在真实编辑器里编译一次 ────────────────────────────
+	# 单元测试里 Cue 这个自动加载解析不了,只能编译打了桩的版本;
+	# 这里是真实编辑器,自动加载已注册,编译的是原样文本。
+	var gen_opts := CueScriptGenerator.Options.new()
+	gen_opts.sheet_path = "res://examples/hello_cue/shot_01.tres"
+	var gen_text: String = CueScriptGenerator.generate(sheet, gen_opts)
+	var gd := GDScript.new()
+	gd.source_code = gen_text
+	var gen_err := gd.reload()
+	_ok(gen_err == OK, "生成的剧本骨架在真实编辑器里编译通过(错误码 %d)" % gen_err)
+	_ok(gen_text.count("await Cue.at(") == sheet.markers.size(),
+		"每个标记一条 await(%d 条 / %d 个标记)"
+			% [gen_text.count("await Cue.at("), sheet.markers.size()])
+
+	# 折叠掉的轨道不进剧本
+	st.set_collapsed(&"mouth", true)
+	panel.call("generate_script", "user://cue_gen_test.gd")
+	await get_tree().process_frame
+	var written := FileAccess.get_file_as_string("user://cue_gen_test.gd")
+	_ok(written != "", "剧本文件写出来了")
+	_ok(not written.contains("[mouth]"), "折叠的 mouth 轨没有进剧本")
+	_ok(written.contains("[dialogue]"), "展开的 dialogue 轨进了剧本")
+	st.set_all_collapsed(false)
+
 	panel.queue_free()
 	print("EDIT RESULT ", "PASS" if _fail == 0 else "FAIL", "  %d 通过 / %d 失败" % [_pass, _fail])
 

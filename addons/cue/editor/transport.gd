@@ -11,6 +11,7 @@ signal stop_requested()
 signal analyze_requested()
 signal import_requested()
 signal collapse_all_requested(collapsed: bool)
+signal generate_script_requested()
 signal zoom_in_requested()
 signal zoom_out_requested()
 signal zoom_fit_requested()
@@ -92,6 +93,9 @@ func _build() -> void:
 	# 4.7.2 实测编辑器主题里没有 "AssetLib" 图标,用 "AnimationTrackList"
 	var imp_btn := _button("导入", "AnimationTrackList", "导入 Rhubarb JSON 或 MFA TextGrid")
 	imp_btn.pressed.connect(func() -> void: import_requested.emit())
+
+	var gen_btn := _button("生成剧本", "Script", "把标记导出成一串 await Cue.at() 的 GDScript 骨架")
+	gen_btn.pressed.connect(func() -> void: generate_script_requested.emit())
 
 	_progress = ProgressBar.new()
 	_progress.custom_minimum_size.x = 90.0
