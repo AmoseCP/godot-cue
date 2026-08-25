@@ -119,5 +119,5 @@ func _draw_waveform(area: Rect2) -> void:
 		pts[x * 2] = Vector2(float(x), mid - wf.maxs[b] * half)
 		pts[x * 2 + 1] = Vector2(float(x), mid - wf.mins[b] * half)
 	draw_multiline(pts, Color(0.3, 0.4, 0.55))
-	var px := Cue.time() / dur * area.size.x
+	var px: float = Cue.time() / dur * area.size.x
 	draw_line(Vector2(px, area.position.y), Vector2(px, area.end.y), Color(1.0, 0.4, 0.4), 2.0)

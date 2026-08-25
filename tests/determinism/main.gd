@@ -39,7 +39,9 @@ func _process(_delta: float) -> void:
 
 func _draw() -> void:
 	draw_rect(Rect2(Vector2.ZERO, get_viewport_rect().size), _color)
-	var t := Cue.time()
+	# Cue 是自动加载,类型对解析器不可见,所以这里必须显式标注类型 ——
+	# 否则在还没有类缓存的全新项目里会报 "Cannot infer the type"。
+	var t: float = Cue.time()
 	# 位置是 t 的纯函数
 	var x := 60.0 + fmod(t, 3.0) * 180.0
 	var y := 200.0 + sin(t * 3.0) * 80.0
