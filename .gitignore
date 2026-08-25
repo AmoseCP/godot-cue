@@ -1,0 +1,28 @@
+# ── Godot ───────────────────────────────────────────────
+.godot/
+.import/
+export.cfg
+export_presets.cfg
+*.translation
+
+# ── macOS / 编辑器 ──────────────────────────────────────
+.DS_Store
+*.swp
+.vscode/
+.idea/
+
+# ── 内部文档与 AI 工作资料(不进公开仓库)─────────────────
+PLAN.md
+CLAUDE.md
+NOTES.md
+AGENTS.md
+.claude/
+workflow-system/
+docs/internal/
+
+# ── 测试产物 ────────────────────────────────────────────
+tests/results/
+tests/render_a/
+tests/render_b/
+*.avi
+*.png.import
