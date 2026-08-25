@@ -39,6 +39,11 @@ func _describe(sheet: CueSheet) -> String:
 		var stale := path != "" and not wf.matches(path)
 		lines.append("波形:%d 个峰值桶 · %.2fs · %d Hz%s"
 			% [wf.bucket_count(), wf.duration, wf.mix_rate, "(音频已变,建议重新分析)" if stale else ""])
+	var env := sheet.envelope
+	if env == null or not env.is_valid():
+		lines.append("包络:未生成")
+	else:
+		lines.append("包络:%d 点 @ %.0fHz · 峰值 %.2f" % [env.count(), env.rate, env.peak()])
 	var issues := sheet.validate()
 	if not issues.is_empty():
 		lines.append("⚠ " + "; ".join(issues))

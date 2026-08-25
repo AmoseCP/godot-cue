@@ -68,4 +68,6 @@ func _write_sheet() -> void:
 	]:
 		sheet.add_marker(CueMarker.new(d[0], d[1], d[2]))
 	sheet.waveform = CueWaveformBuilder.new().build(CuePcmReader.read_wav_file(WAV), 256)
+	sheet.envelope = CueEnvelopeBuilder.normalized(
+		CueEnvelopeBuilder.from_cache(sheet.waveform))
 	print("写入 ", SHEET, " → ", ResourceSaver.save(sheet, SHEET))

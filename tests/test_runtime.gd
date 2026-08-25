@@ -39,6 +39,7 @@ func _run() -> void:
 	await _test_dense_markers_same_frame()
 	await _test_mouth_shape()
 	await _test_mouth_shape_payload()
+	await _test_mouth_shape_amplitude()
 
 	print("\n=== %d 通过 / %d 失败 ===" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
@@ -55,6 +56,10 @@ func ok(cond: bool, what: String) -> void:
 
 func eq(a: Variant, b: Variant, what: String) -> void:
 	ok(a == b, "%s (得到 %s,期望 %s)" % [what, a, b])
+
+
+func near(a: float, b: float, tol: float, what: String) -> void:
+	ok(absf(a - b) <= tol, "%s (得到 %.5f,期望 %.5f ±%.5f)" % [what, a, b, tol])
 
 
 func _sheet(times: Array, fps: int = 30) -> CueSheet:
@@ -330,5 +335,62 @@ func _test_mouth_shape_payload() -> void:
 		if m2.shape_at(0.6) != first:
 			same = false
 	ok(same, "同时间的两个音素,排序结果每次都一样(全序)")
+	mouth.queue_free()
+	m2.queue_free()
+
+
+func _test_mouth_shape_amplitude() -> void:
+	print("\n[CueMouthShape] 响度驱动的降级模式")
+	var sheet := _sheet([[&"x", 0.0]])
+	var env := CueEnvelope.new()
+	env.rate = 10.0
+	env.duration = 0.5
+	# 0 → 0.10 → 0.25 → 0.50 → 0.90:正好跨过三个阈值的四个档
+	env.values = PackedFloat32Array([0.0, 0.10, 0.25, 0.50, 0.90])
+	sheet.envelope = env
+	_cue.load_sheet(sheet)
+
+	near(_cue.amplitude(0.0), 0.0, 1e-6, "Cue.amplitude() 读到静音")
+	near(_cue.amplitude(0.4), 0.90, 1e-6, "Cue.amplitude() 读到峰值")
+	near(_cue.amplitude(0.05), 0.05, 1e-6, "Cue.amplitude() 会插值")
+
+	var mouth := CueMouthShape.new()
+	mouth.cue_path = _cue.get_path()
+	mouth.source = CueMouthShape.Source.AMPLITUDE
+	mouth.amplitude_shapes = [&"X", &"B", &"C", &"D"]
+	mouth.amplitude_thresholds = PackedFloat32Array([0.06, 0.18, 0.38])
+	root.add_child(mouth)
+	await process_frame
+	mouth.rebuild()
+
+	ok(mouth.is_ready(), "有包络时视为就绪")
+	eq(String(mouth.shape_at(0.0)), "X", "静音 → 闭嘴")
+	eq(String(mouth.shape_at(0.1)), "B", "小声 → 微张")
+	eq(String(mouth.shape_at(0.2)), "C", "中等 → 张开")
+	eq(String(mouth.shape_at(0.3)), "D", "大声 → 全开")
+	eq(String(mouth.shape_at(0.4)), "D", "更大声仍是最高档")
+
+	# 纯函数 —— 响度模式不预展开序列,直接查包络,同样必须稳定
+	var stable := true
+	for i in 30:
+		if mouth.shape_at(0.23) != &"C":
+			stable = false
+	ok(stable, "响度模式的 shape_at() 也是纯函数")
+
+	# 档位比嘴型少时不能越界
+	mouth.amplitude_shapes = [&"X", &"B"]
+	eq(String(mouth.shape_at(0.4)), "B", "嘴型不够时取最后一个,不越界")
+
+	# 没有包络时要报错但不崩
+	var no_env := _sheet([[&"y", 0.0]])
+	_cue.load_sheet(no_env)
+	var m2 := CueMouthShape.new()
+	m2.cue_path = _cue.get_path()
+	m2.source = CueMouthShape.Source.AMPLITUDE
+	root.add_child(m2)
+	await process_frame
+	m2.rebuild()
+	ok(not m2.is_ready(), "没有包络时 is_ready() 为 false")
+	eq(String(m2.shape_at(0.5)), "X", "没有包络时退回静止嘴型,不崩溃")
 	mouth.queue_free()
 	m2.queue_free()

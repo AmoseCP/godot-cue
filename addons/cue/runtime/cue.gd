@@ -212,6 +212,23 @@ func phonemes(marker_name: StringName) -> Array:
 	return p if p is Array else []
 
 
+## 当前(或指定)时刻的振幅,0..1。没有包络数据时返回 0。
+##
+## 这是"按响度驱动嘴型"的降级方案入口,见 [CueEnvelope]。
+## 是时间的纯函数,不破坏离线渲染的确定性。
+func amplitude(t: float = -1.0) -> float:
+	if _sheet == null or _sheet.envelope == null:
+		return 0.0
+	return _sheet.envelope.at(time() if t < 0.0 else t)
+
+
+## 按阈值分档的响度,0..thresholds.size()。
+func amplitude_level(thresholds: PackedFloat32Array, t: float = -1.0) -> int:
+	if _sheet == null or _sheet.envelope == null:
+		return 0
+	return _sheet.envelope.level(time() if t < 0.0 else t, thresholds)
+
+
 func markers_in(track: StringName) -> Array[CueMarker]:
 	if _sheet == null:
 		return []

@@ -32,6 +32,10 @@ class_name CueSheet extends Resource
 
 @export var waveform: WaveformCache = null
 
+## 振幅包络。没有口型数据时的降级方案(见 [CueEnvelope])。
+## 和波形缓存一起在「分析波形」时生成。
+@export var envelope: CueEnvelope = null
+
 ## 用于帧吸附和帧标尺。与项目实际渲染帧率一致才有意义。
 @export_range(1, 240, 1) var fps: int = 30:
 	set(v):

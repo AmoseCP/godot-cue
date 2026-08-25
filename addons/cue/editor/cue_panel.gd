@@ -21,6 +21,7 @@ var _name_edit: LineEdit = null
 var _renaming: CueMarker = null
 var _open_dialog: EditorFileDialog = null
 var _import_dialog: EditorFileDialog = null
+var _script_dialog: EditorFileDialog = null
 var _dirty: bool = false
 var _analyzing: bool = false
 
@@ -96,6 +97,7 @@ func _ready() -> void:
 	_transport.analyze_requested.connect(analyze_waveform)
 	_transport.import_requested.connect(_import_dialog_show)
 	_transport.collapse_all_requested.connect(func(v: bool) -> void: state.set_all_collapsed(v))
+	_transport.generate_script_requested.connect(_script_dialog_show)
 	_transport.add_marker_requested.connect(func() -> void: _add_marker(state.maybe_snap(state.playhead)))
 	_transport.zoom_in_requested.connect(func() -> void: state.zoom_at(1.4, size.x * 0.5))
 	_transport.zoom_out_requested.connect(func() -> void: state.zoom_at(1.0 / 1.4, size.x * 0.5))
@@ -201,6 +203,11 @@ func analyze_waveform() -> void:
 	if state.sheet != sheet:
 		return                        # 分析期间用户换了 sheet
 	sheet.waveform = cache
+	# 包络是从峰值缓存推出来的,瞬时完成,所以不给它单独的按钮 ——
+	# 分析一次就两样都有了。
+	var env := CueEnvelopeBuilder.normalized(CueEnvelopeBuilder.from_cache(cache))
+	env.source_hash = cache.source_hash
+	sheet.envelope = env
 	_mark_dirty()
 	state.notify_sheet_edited()
 	state.zoom_fit()
@@ -432,6 +439,46 @@ func _ensure_tracks(names: PackedStringArray) -> void:
 			continue
 		sheet.tracks.append(CueTrack.new(sn, palette[sheet.tracks.size() % palette.size()]))
 	state.notify_sheet_edited()
+
+
+# ── 生成剧本骨架 ────────────────────────────────────────────────────
+
+func _script_dialog_show() -> void:
+	if state.sheet == null:
+		push_error("Cue:先打开一个 CueSheet 再生成剧本。")
+		return
+	if _script_dialog == null:
+		_script_dialog = EditorFileDialog.new()
+		_script_dialog.file_mode = EditorFileDialog.FILE_MODE_SAVE_FILE
+		_script_dialog.access = EditorFileDialog.ACCESS_RESOURCES
+		_script_dialog.add_filter("*.gd", "GDScript")
+		_script_dialog.title = "生成剧本骨架"
+		_script_dialog.file_selected.connect(generate_script)
+		add_child(_script_dialog)
+	var base := state.sheet.resource_path.get_basename()
+	_script_dialog.current_path = (base if base != "" else "res://shot") + "_shot.gd"
+	_script_dialog.popup_centered_ratio(0.6)
+
+
+## 只生成当前展开的轨道 —— 折叠一条轨等于"这条我现在不关心",
+## 那它多半也不该出现在剧本里。口型轨几百个标记尤其不该进。
+func generate_script(path: String) -> void:
+	var sheet := state.sheet
+	if sheet == null:
+		return
+	var opts := CueScriptGenerator.Options.new()
+	var visible := PackedStringArray()
+	for n in state.track_list():
+		if not state.is_collapsed(n):
+			visible.append(String(n))
+	if visible.size() < state.track_list().size():
+		opts.tracks = visible
+	var err := CueScriptGenerator.save(sheet, path, opts)
+	if err != OK:
+		push_error("Cue:写入 %s 失败(错误码 %d)。" % [path, err])
+		return
+	EditorInterface.get_resource_filesystem().update_file(path)
+	print("Cue:剧本骨架已生成 → %s" % path)
 
 
 # ── 打开对话框 / 滚动条 ─────────────────────────────────────────────

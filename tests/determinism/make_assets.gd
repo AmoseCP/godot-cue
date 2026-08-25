@@ -27,6 +27,8 @@ func _init() -> void:
 	sheet.fps = 30
 	sheet.audio_path = WAV
 	sheet.waveform = CueWaveformBuilder.new().build(CuePcmReader.read_wav_file(WAV), 256)
+	sheet.envelope = CueEnvelopeBuilder.normalized(
+		CueEnvelopeBuilder.from_cache(sheet.waveform))
 	# 刻意用非帧对齐的时间,逼出"标记落在两帧之间"的情况
 	for d in [[&"start", 0.05], [&"beat_a", 0.417], [&"beat_b", 0.933],
 			[&"beat_c", 1.5], [&"beat_d", 2.017], [&"tail", 2.6]]:

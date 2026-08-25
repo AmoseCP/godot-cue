@@ -30,6 +30,7 @@ signal shape_changed(shape: StringName)
 enum Source {
 	TRACK,            ## 读整条轨道上的标记
 	MARKER_PAYLOAD,   ## 读某个标记 payload 里的 phonemes 序列
+	AMPLITUDE,        ## 没有口型数据时的降级方案:按响度分档开合
 }
 
 @export var source: Source = Source.TRACK:
@@ -61,6 +62,13 @@ enum Source {
 
 ## 序列开始之前显示哪个嘴型。
 @export var rest_shape: StringName = &"X"
+
+## [code]Source.AMPLITUDE[/code] 时:各档位对应的嘴型,从静到响。
+## 长度必须比 [member amplitude_thresholds] 多一个。
+@export var amplitude_shapes: Array[StringName] = [&"X", &"B", &"C", &"D"]
+
+## [code]Source.AMPLITUDE[/code] 时的分档阈值,升序,0..1。
+@export var amplitude_thresholds: PackedFloat32Array = PackedFloat32Array([0.06, 0.18, 0.38])
 
 ## Cue 自动加载的路径。做成可配置是为了让这个脚本
 ## [b]不必[/b]在解析期引用全局的 Cue 标识符 —— 插件扫描顺序早于
@@ -96,6 +104,13 @@ func rebuild() -> void:
 	if sheet == null:
 		return
 
+	if source == Source.AMPLITUDE:
+		# 响度模式不预先展开成序列 —— shape_at() 直接查包络,
+		# 这样内存占用与音频长度无关,而且仍然是纯函数。
+		if sheet.envelope == null or not sheet.envelope.is_valid():
+			push_error("Cue:CueMouthShape 用的是响度模式,但这个 CueSheet 还没有振幅包络。请在 Cue 面板里点「分析波形」。")
+		return
+
 	var entries: Array = []
 	if source == Source.TRACK:
 		for m in sheet.in_track(track):
@@ -127,6 +142,8 @@ func rebuild() -> void:
 
 ## [param t] 时刻应该显示的嘴型。[b]纯函数[/b] —— 同样的 t 永远给同样的结果。
 func shape_at(t: float) -> StringName:
+	if source == Source.AMPLITUDE:
+		return _shape_from_amplitude(t)
 	if _times.is_empty():
 		return rest_shape
 	# before=false:相等时返回它们之后的位置,于是 i-1 就是"最后一个 <= t"
@@ -136,12 +153,30 @@ func shape_at(t: float) -> StringName:
 	return _shapes[i - 1]
 
 
+## 响度 → 档位 → 嘴型。档位数由阈值个数决定,超出 shapes 长度就取最后一个。
+func _shape_from_amplitude(t: float) -> StringName:
+	if _cue == null or amplitude_shapes.is_empty():
+		return rest_shape
+	var lv: int = _cue.call("amplitude_level", amplitude_thresholds, t)
+	return amplitude_shapes[clampi(lv, 0, amplitude_shapes.size() - 1)]
+
+
 func current_shape() -> StringName:
 	return _current
 
 
 func entry_count() -> int:
 	return _times.size()
+
+
+## 响度模式下没有预展开的序列,用这个判断数据是否就绪。
+func is_ready() -> bool:
+	if source != Source.AMPLITUDE:
+		return not _times.is_empty()
+	if _cue == null:
+		return false
+	var sheet: CueSheet = _cue.call("sheet")
+	return sheet != null and sheet.envelope != null and sheet.envelope.is_valid()
 
 
 func _process(_delta: float) -> void:
