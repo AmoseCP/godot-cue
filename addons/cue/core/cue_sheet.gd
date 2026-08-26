@@ -285,6 +285,41 @@ func set_segment_offset(seg: CueAudioSegment, v: float) -> void:
 		touch()
 
 
+## [param t] 时刻某条轨上应该显示的文本(取 payload.text)。
+##
+## 规则:取该轨上时间 <= t 的最后一个带 text 的标记;如果它带 [code]end[/code]
+## 且 t 已经越过 end,就返回空 —— 这样 MFA 导进来的词级切分不会让
+## 上一个词一直挂着不消失。
+func text_at(t: float, track_name: StringName) -> String:
+	var best: CueMarker = null
+	for m in sorted():
+		if m.track != track_name or m.time > t:
+			continue
+		if not m.payload.has("text"):
+			continue
+		if String(m.payload["text"]).strip_edges() == "":
+			continue
+		best = m
+	if best == null:
+		return ""
+	if best.payload.has("end") and t > float(best.payload["end"]):
+		return ""
+	return String(best.payload["text"])
+
+
+## 有文本的轨道 —— 字幕条只显示这些。
+func text_tracks() -> Array[StringName]:
+	var out: Array[StringName] = []
+	for m in markers:
+		if m == null or not m.payload.has("text"):
+			continue
+		if String(m.payload["text"]).strip_edges() == "":
+			continue
+		if not out.has(m.track):
+			out.append(m.track)
+	return out
+
+
 func track_color(track_name: StringName, fallback: Color) -> Color:
 	for t in tracks:
 		if t != null and t.name == track_name:

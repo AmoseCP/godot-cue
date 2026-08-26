@@ -297,6 +297,12 @@ func _draw_markers() -> void:
 				draw_rect(Rect2(x - 1.0, top + 1.0, 2.0, h - 2.0), col)
 				continue
 
+			# 带 end 的标记(词级切分、口型区间)画出它覆盖的跨度
+			if state.show_text and m.payload.has("end"):
+				var xe := state.time_to_x(float(m.payload["end"]))
+				if xe > x:
+					draw_rect(Rect2(x, top + 1.0, xe - x, h - 2.0), Color(col, 0.16))
+
 			# 泳道里的抓取块
 			draw_rect(Rect2(x - 1.0, top + 1.0, 2.0, h - 2.0), col)
 			var tri := PackedVector2Array([
@@ -305,9 +311,16 @@ func _draw_markers() -> void:
 				Vector2(x, top + 9.0),
 			])
 			draw_colored_polygon(tri, col)
-			if _font != null and m.name != &"":
+			# 有文本就显示文本 —— 对着波形核字幕时,名字(m_0007)远不如
+			# 内容("你好")有用
+			var label := String(m.name)
+			if state.show_text and m.payload.has("text"):
+				var txt := String(m.payload["text"]).strip_edges()
+				if txt != "":
+					label = txt
+			if _font != null and label != "":
 				draw_string(_font, Vector2(x + MARKER_LABEL_PAD, top + h - 5.0),
-					String(m.name), HORIZONTAL_ALIGNMENT_LEFT, -1,
+					label, HORIZONTAL_ALIGNMENT_LEFT, -1,
 					maxi(_font_size - 1, 8), col)
 
 

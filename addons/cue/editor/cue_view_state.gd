@@ -23,6 +23,8 @@ var px_per_sec: float = 100.0
 var scroll_sec: float = 0.0
 var playhead: float = 0.0
 var snap_to_frame: bool = false
+## 泳道里画 payload.text 而不是标记名,并显示文本覆盖的时间跨度。
+var show_text: bool = true
 var view_width: float = 1000.0
 ## 按 M 加标记时落在哪条轨上。
 var active_track: StringName = &"dialogue"

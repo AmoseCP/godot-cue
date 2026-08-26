@@ -12,6 +12,7 @@ signal analyze_requested()
 signal import_requested()
 signal collapse_all_requested(collapsed: bool)
 signal export_requested(kind: int)
+signal show_text_toggled(on: bool)
 signal zoom_in_requested()
 signal zoom_out_requested()
 signal zoom_fit_requested()
@@ -79,6 +80,15 @@ func _build() -> void:
 		state.snap_to_frame = on
 		snap_toggled.emit(on))
 	add_child(_snap_check)
+
+	var text_check := CheckBox.new()
+	text_check.text = "字幕"
+	text_check.button_pressed = true
+	text_check.tooltip_text = "泳道里显示 payload.text 而不是标记名,并画出文本覆盖的跨度"
+	text_check.toggled.connect(func(on: bool) -> void:
+		state.show_text = on
+		show_text_toggled.emit(on))
+	add_child(text_check)
 
 	var fold_btn := _button("", "CollapseTree", "折叠所有轨道")
 	fold_btn.pressed.connect(func() -> void: collapse_all_requested.emit(true))

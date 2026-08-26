@@ -14,6 +14,7 @@ var _transport: CueTransport = null
 var _ruler: CueRuler = null
 var _view: CueWaveformView = null
 var _headers: CueTrackHeaders = null
+var _subtitles: CueSubtitleBar = null
 var _hscroll: HScrollBar = null
 var _player: AudioStreamPlayer = null
 var _clock: CueClock = null
@@ -68,6 +69,10 @@ func _ready() -> void:
 	_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	body.add_child(_view)
 
+	_subtitles = CueSubtitleBar.new()
+	_subtitles.setup(state)
+	add_child(_subtitles)
+
 	var scroll_row := HBoxContainer.new()
 	scroll_row.add_theme_constant_override("separation", 0)
 	add_child(scroll_row)
@@ -99,6 +104,9 @@ func _ready() -> void:
 	_transport.import_requested.connect(_import_dialog_show)
 	_transport.collapse_all_requested.connect(func(v: bool) -> void: state.set_all_collapsed(v))
 	_transport.export_requested.connect(_export_requested)
+	_transport.show_text_toggled.connect(func(_on: bool) -> void:
+		state.notify_sheet_edited()
+		_view.queue_redraw())
 	_transport.add_marker_requested.connect(func() -> void: _add_marker(state.maybe_snap(state.playhead)))
 	_transport.zoom_in_requested.connect(func() -> void: state.zoom_at(1.4, size.x * 0.5))
 	_transport.zoom_out_requested.connect(func() -> void: state.zoom_at(1.0 / 1.4, size.x * 0.5))
