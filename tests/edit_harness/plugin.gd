@@ -316,6 +316,39 @@ func _run() -> void:
 	await get_tree().process_frame
 	_ok(sheet.segments.size() == last_n, "拒绝删掉最后一个片段")
 
+	# ── 导入新建的轨道也必须进 undo ──────────────────────────────────
+	# CLAUDE.md:所有会修改资源的编辑操作都要走 EditorUndoRedoManager。
+	# 曾经 ensure_tracks() 在 commit_action() 之后直接改 sheet.tracks,
+	# 于是「导入 → 撤销」会留下孤儿轨道。
+	var fresh := CueSheet.new()
+	fresh.fps = 30
+	fresh.audio_path = "res://tests/probe/tone_1s.wav"
+	ResourceSaver.save(fresh, "user://cue_track_undo.tres")
+	fresh.take_over_path("user://cue_track_undo.tres")
+	panel.open_sheet(fresh)
+	await get_tree().process_frame
+
+	var tracks_before: int = fresh.tracks.size()
+	panel.call("import_file",
+		ProjectSettings.globalize_path("res://tests/fixtures/sample_rhubarb.json"))
+	await get_tree().process_frame
+	_ok(fresh.tracks.size() > tracks_before,
+		"导入建出了新轨道(%d → %d)" % [tracks_before, fresh.tracks.size()])
+	_ok(fresh.markers.size() == 12, "导入了 12 个标记")
+
+	var ur2 := undo.get_history_undo_redo(undo.get_object_history_id(fresh))
+	ur2.undo()
+	await get_tree().process_frame
+	_ok(fresh.markers.is_empty(), "撤销后标记清空")
+	_ok(fresh.tracks.size() == tracks_before,
+		"撤销后轨道也回到原样,没有留下孤儿(得到 %d,期望 %d)"
+			% [fresh.tracks.size(), tracks_before])
+
+	ur2.redo()
+	await get_tree().process_frame
+	_ok(fresh.markers.size() == 12, "重做恢复标记")
+	_ok(fresh.tracks.size() > tracks_before, "重做也恢复轨道")
+
 	panel.queue_free()
 	print("EDIT RESULT ", "PASS" if _fail == 0 else "FAIL", "  %d 通过 / %d 失败" % [_pass, _fail])
 

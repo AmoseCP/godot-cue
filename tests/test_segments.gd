@@ -15,6 +15,7 @@ func _init() -> void:
 	_test_overlap_and_gap()
 	_test_mutations()
 	_test_validate()
+	_test_sort_cache_invalidation()
 	print("\n=== %d 通过 / %d 失败 ===" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -200,3 +201,52 @@ func _test_validate() -> void:
 	var issues := sheet.validate()
 	ok(issues.size() == 1 and issues[0].contains("broken"),
 		"既没 path 也没 stream 的片段被检出:%s" % issues)
+
+func _test_sort_cache_invalidation() -> void:
+	print("\n[缓存] 直接改标记属性后,排序缓存必须失效")
+	# 编辑器走的是 CueSheet.set_marker_time(),会 touch()。
+	# 但用户脚本完全可能直接写 sheet.find(&"x").time = 5.0 ——
+	# 那时 CueSheet 不知道自己脏了,sorted() 会返回陈旧顺序,
+	# Cue 的触发队列跟着错序。
+	var sheet := CueSheet.new()
+	sheet.fps = 30
+	sheet.add_marker(CueMarker.new(&"a", 1.0))
+	sheet.add_marker(CueMarker.new(&"b", 2.0))
+	sheet.add_marker(CueMarker.new(&"c", 3.0))
+	eq(_names(sheet), ["a", "b", "c"], "初始顺序")
+
+	# 不经过任何 sheet 方法,直接改标记
+	sheet.find(&"c").time = 0.5
+	eq(_names(sheet), ["c", "a", "b"], "直接改 time 之后 sorted() 立刻反映新顺序")
+
+	# 改名也影响排序(同时间按名字做全序)
+	var m := CueSheet.new()
+	m.add_marker(CueMarker.new(&"z", 1.0))
+	m.add_marker(CueMarker.new(&"y", 1.0))
+	eq(_names(m), ["y", "z"], "同时间按名字排")
+	m.find(&"z").name = &"a"
+	eq(_names(m), ["a", "y"], "直接改名之后重新排序")
+
+	# 改轨道要让 in_track 立刻反映
+	var t := CueSheet.new()
+	t.add_marker(CueMarker.new(&"p", 1.0, &"one"))
+	eq(t.in_track(&"one").size(), 1, "初始在 one 轨")
+	t.find(&"p").track = &"two"
+	eq(t.in_track(&"one").size(), 0, "直接改轨道后 one 轨空了")
+	eq(t.in_track(&"two").size(), 1, "出现在 two 轨")
+
+	# 整批替换 markers 数组之后同样要生效
+	var b := CueSheet.new()
+	b.add_marker(CueMarker.new(&"old", 1.0))
+	var fresh: Array[CueMarker] = [CueMarker.new(&"n2", 2.0), CueMarker.new(&"n1", 1.0)]
+	b.markers = fresh
+	eq(_names(b), ["n1", "n2"], "整批替换后按新数据排序")
+	b.find(&"n2").time = 0.5
+	eq(_names(b), ["n2", "n1"], "替换进来的标记也被盯着")
+
+
+func _names(sheet: CueSheet) -> Array:
+	var out: Array = []
+	for m in sheet.sorted():
+		out.append(String(m.name))
+	return out

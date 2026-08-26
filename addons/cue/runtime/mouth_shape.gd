@@ -207,7 +207,10 @@ func _process(_delta: float) -> void:
 
 
 func _apply(s: StringName) -> void:
-	if sprite == null:
+	# 用 is_instance_valid 而不是 == null:被 free() 的 Node 不是 null,是失效实例。
+	# (实测当前这几行不会因此报错 —— `is` 对失效实例安全返回 false ——
+	#  但这是运气,不是设计。角色下场、场景切换时目标被释放是常态。)
+	if not is_instance_valid(sprite):
 		return
 	if sprite is AnimatedSprite2D:
 		var a := sprite as AnimatedSprite2D

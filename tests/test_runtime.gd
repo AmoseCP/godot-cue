@@ -47,6 +47,7 @@ func _run() -> void:
 	await _test_await_before_play_and_while_paused()
 	await _test_mouth_auto_rebuild()
 	await _test_after_and_pause_then_stop()
+	await _test_freed_target_node()
 
 	print("\n=== %d 通过 / %d 失败 ===" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
@@ -708,3 +709,46 @@ func _test_after_and_pause_then_stop() -> void:
 	_cue.stop()
 	await _advance(3)
 	ok(freed2[0], "stop() 也能放行卡在 after() 延迟里的协程")
+
+func _test_freed_target_node() -> void:
+	print("\n[CueMouthShape] 目标节点被释放之后")
+	# 角色下场、场景切换,目标 Sprite 被 free 掉是很正常的事。
+	# 被 free 的 Node [b]不是 null[/b],是失效实例 —— 用 `== null` 判断挡不住,
+	# 访问它会报错,而 _apply() 报错会让它后面的 shape_changed.emit() 不执行。
+	# 所以"信号还发不发"正好能测出这个 bug。
+	_cue.load_sheet(_mouth_sheet())
+	var sprite := Sprite2D.new()
+	root.add_child(sprite)
+
+	var mouth := CueMouthShape.new()
+	mouth.cue_path = _cue.get_path()
+	mouth.track = &"mouth"
+	mouth.sprite = sprite
+	mouth.shape_textures = {
+		&"X": PlaceholderTexture2D.new(),
+		&"B": PlaceholderTexture2D.new(),
+		&"C": PlaceholderTexture2D.new(),
+		&"A": PlaceholderTexture2D.new(),
+	}
+	root.add_child(mouth)
+	await process_frame
+
+	var fired: Array[String] = []
+	mouth.shape_changed.connect(func(sh: StringName) -> void: fired.append(String(sh)))
+
+	# 先正常跑一段,确认信号本来是会发的
+	_cue.play(0.0)
+	await _advance(10)
+	var before := fired.size()
+	ok(before > 0, "释放之前 shape_changed 正常发出(%d 次)" % before)
+
+	# 把目标节点释放掉,继续播
+	sprite.free()
+	await _advance(20)
+	ok(fired.size() > before,
+		"目标被释放后 shape_changed 仍然发出(%d → %d)—— 说明 _apply() 没有报错中断"
+			% [before, fired.size()])
+	ok(String(mouth.current_shape()) != "", "当前嘴型仍在更新:%s" % mouth.current_shape())
+	_cue.stop()
+	mouth.queue_free()
+	await process_frame

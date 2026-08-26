@@ -164,7 +164,7 @@ func now() -> float:
 	if _movie:
 		# 纯帧计数 —— 不读任何音频状态,因此是确定性的。
 		return _start_offset + float(_frame_counter() - _start_frame) / render_fps()
-	if player != null and player.playing and not player.stream_paused:
+	if is_instance_valid(player) and player.playing and not player.stream_paused:
 		var t := anchor_offset + player.get_playback_position()
 		t += AudioServer.get_time_since_last_mix()
 		t -= AudioServer.get_output_latency()

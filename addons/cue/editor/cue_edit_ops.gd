@@ -161,35 +161,48 @@ func import_markers(res: CueImportResult, source_name: String) -> void:
 		m.name = n
 		taken[n] = true
 
+	# 新轨道必须和标记[b]同一个 action[/b]。曾经这里在 commit 之后单独建轨道,
+	# 于是「导入 → 撤销」会留下孤儿轨道 —— 违反 CLAUDE.md
+	# 「所有会修改资源的编辑操作都要走 EditorUndoRedoManager」。
+	var new_tracks := missing_tracks(res.tracks)
+
 	_undo.create_action("Cue:导入 %s(%d 个标记)" % [source_name, res.markers.size()],
 		UndoRedo.MERGE_DISABLE, sheet)
+	for t in new_tracks:
+		_undo.add_do_method(sheet, "add_track", t)
 	for m in res.markers:
 		_undo.add_do_method(sheet, "add_marker", m)
 	# 撤销时倒着删,顺序才对得上
 	for i in range(res.markers.size() - 1, -1, -1):
 		_undo.add_undo_method(sheet, "remove_marker", res.markers[i])
+	for i in range(new_tracks.size() - 1, -1, -1):
+		_undo.add_undo_method(sheet, "remove_track", new_tracks[i])
 	_undo.add_do_method(sheet, "touch")
 	_undo.add_undo_method(sheet, "touch")
 	_undo.commit_action()
 
-	ensure_tracks(res.tracks)
 
-
-## 导入带进来的新轨道要有个颜色,否则全挤在默认色上分不清。
-func ensure_tracks(names: PackedStringArray) -> void:
+## 为 [param names] 里还没有 CueTrack 的轨道各造一个(带配色)。
+## [b]只构造,不写入[/b] —— 写入由调用方放进 undo action 里。
+## 新轨道要有个颜色,否则全挤在默认色上分不清。
+func missing_tracks(names: PackedStringArray) -> Array[CueTrack]:
+	var out: Array[CueTrack] = []
 	var sheet := _sheet()
 	if sheet == null:
-		return
-	var existing := {}
-	for t in sheet.tracks:
-		existing[t.name] = true
+		return out
 	var palette := [
 		Color(0.40, 0.70, 1.00), Color(1.00, 0.65, 0.30), Color(0.55, 0.90, 0.55),
 		Color(0.90, 0.55, 0.90), Color(0.95, 0.85, 0.40),
 	]
+	var taken := {}
+	for t in sheet.tracks:
+		if t != null:
+			taken[t.name] = true
 	for n in names:
 		var sn := StringName(n)
-		if existing.has(sn):
+		if taken.has(sn):
 			continue
-		sheet.tracks.append(CueTrack.new(sn, palette[sheet.tracks.size() % palette.size()]))
-	_state.notify_sheet_edited()
+		taken[sn] = true
+		out.append(CueTrack.new(sn,
+			palette[(sheet.tracks.size() + out.size()) % palette.size()]))
+	return out

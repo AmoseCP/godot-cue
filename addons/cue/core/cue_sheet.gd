@@ -36,7 +36,9 @@ class_name CueSheet extends Resource
 
 @export var markers: Array[CueMarker] = []:
 	set(v):
+		_unwatch_all()
 		markers = v
+		_watch_all()
 		_dirty = true
 		emit_changed()
 
@@ -75,8 +77,9 @@ var _seg_cache: Array[CueAudioSegment] = []
 ## 与 CueSheet 的 GLOBAL(0) 冲突,每次增删都刷一条
 ## [code]UndoRedo history mismatch[/code]。让 sheet 自己拿着引用就绕开了。
 var _retained: Array[CueMarker] = []
-## 同理,被摘下来的片段也要有人拿着。
+## 同理,被摘下来的片段和轨道也要有人拿着。
 var _retained_segments: Array[CueAudioSegment] = []
+var _retained_tracks: Array[CueTrack] = []
 
 
 ## 按名字查找。名字在一个 sheet 内唯一(见 [method validate])。
@@ -102,6 +105,10 @@ func in_track(track: StringName) -> Array[CueMarker]:
 ## 按 time 升序;time 相同时按名字排序,保证是全序 —— 否则同一份数据
 ## 在两次运行中可能产生不同顺序,离线渲染就不再是纯函数(见 CLAUDE.md 确定性要求)。
 func sorted() -> Array[CueMarker]:
+	# 条数对不上说明有人绕过 add_marker/remove_marker 直接动了数组。
+	# O(1) 的兜底,总比返回一份陈旧顺序强。
+	if _sorted.size() != markers.size():
+		_dirty = true
 	if _dirty:
 		_rebuild_sorted()
 	return _sorted
@@ -127,6 +134,7 @@ func touch() -> void:
 func add_marker(m: CueMarker) -> void:
 	_retained.erase(m)
 	markers.append(m)
+	_watch(m)
 	_dirty = true
 	emit_changed()
 
@@ -135,6 +143,7 @@ func remove_marker(m: CueMarker) -> void:
 	var i := markers.find(m)
 	if i >= 0:
 		markers.remove_at(i)
+		_unwatch(m)
 		if not _retained.has(m):
 			_retained.append(m)
 		_dirty = true
@@ -145,6 +154,7 @@ func remove_marker(m: CueMarker) -> void:
 func insert_marker(m: CueMarker, index: int) -> void:
 	_retained.erase(m)
 	markers.insert(clampi(index, 0, markers.size()), m)
+	_watch(m)
 	_dirty = true
 	emit_changed()
 
@@ -327,6 +337,44 @@ func text_tracks() -> Array[StringName]:
 	return out
 
 
+## 以下三个是给 undo 用的,理由同 [method set_marker_time]:
+## 目标对象必须是 sheet,子资源只作为参数传。
+func add_track(t: CueTrack) -> void:
+	if t == null:
+		return
+	_retained_tracks.erase(t)
+	tracks.append(t)
+	touch()
+
+
+func remove_track(t: CueTrack) -> void:
+	var i := tracks.find(t)
+	if i >= 0:
+		tracks.remove_at(i)
+		if not _retained_tracks.has(t):
+			_retained_tracks.append(t)
+		touch()
+
+
+func insert_track(t: CueTrack, index: int) -> void:
+	if t == null:
+		return
+	_retained_tracks.erase(t)
+	tracks.insert(clampi(index, 0, tracks.size()), t)
+	touch()
+
+
+func index_of_track(t: CueTrack) -> int:
+	return tracks.find(t)
+
+
+func has_track(track_name: StringName) -> bool:
+	for t in tracks:
+		if t != null and t.name == track_name:
+			return true
+	return false
+
+
 func track_color(track_name: StringName, fallback: Color) -> Color:
 	for t in tracks:
 		if t != null and t.name == track_name:
@@ -366,10 +414,42 @@ func unique_name(base: StringName = &"cue") -> StringName:
 	return StringName("%s_%d" % [base, i])
 
 
+## 盯住每个标记的 changed 信号。
+##
+## [CueMarker] 的 time / name / track 三个 setter 都只在[b]标记自己[/b]身上
+## 发 changed,sheet 收不到。编辑器走的是 [method set_marker_time] 这类方法
+## 所以没事,但用户脚本完全可能直接写 [code]sheet.find(&"x").time = 5.0[/code] ——
+## 那时排序缓存不会失效,[method sorted] 返回陈旧顺序,
+## [Cue] 的触发队列跟着错序。这是实测出来的 bug,不是假想。
+func _watch(m: CueMarker) -> void:
+	if m != null and not m.changed.is_connected(_on_marker_changed):
+		m.changed.connect(_on_marker_changed)
+
+
+func _unwatch(m: CueMarker) -> void:
+	if m != null and m.changed.is_connected(_on_marker_changed):
+		m.changed.disconnect(_on_marker_changed)
+
+
+func _watch_all() -> void:
+	for m in markers:
+		_watch(m)
+
+
+func _unwatch_all() -> void:
+	for m in markers:
+		_unwatch(m)
+
+
+func _on_marker_changed() -> void:
+	_dirty = true
+
+
 func _rebuild_sorted() -> void:
 	var arr: Array[CueMarker] = []
 	for m in markers:
 		if m != null:
+			_watch(m)          # 资源反序列化等路径也能补上监听
 			arr.append(m)
 	arr.sort_custom(_compare)
 	_sorted = arr
