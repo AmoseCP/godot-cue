@@ -267,6 +267,9 @@ func _toggle_play() -> void:
 		_transport.set_playing(true)
 
 
+## 停止并回到起点 —— 按钮的 tooltip 一直是这么写的,但代码原来不回,
+## 文案在说谎。传输条上的「停止」按标准媒体播放器的语义:回到起点;
+## 想留在原处用空格暂停。
 func _stop() -> void:
 	if _player != null:
 		_player.stop()
@@ -276,6 +279,9 @@ func _stop() -> void:
 	set_process(false)
 	if _transport != null:
 		_transport.set_playing(false)
+	if state != null:
+		state.set_playhead(0.0)
+		state.scroll_to(0.0)
 
 
 func _seek(t: float) -> void:

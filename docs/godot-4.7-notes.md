@@ -119,10 +119,30 @@ ERROR: UndoRedo history mismatch: expected 0, got 1.
 
 复现:`tests/probe/probe_undo.gd`,回归测试 `tests/edit_harness/`
 
-**`UndoRedo.get_history_count()` 会在编辑器的历史上限处饱和。** 实测到 24 条
-之后就不再增长 —— 新动作会挤掉最旧的。所以拿"计数有没有 +1"来断言
-"这个动作被记下来了"是不可靠的,应该验行为(真的 undo 一次看看),
-或者看 `get_current_action_name()` 是不是自己的动作。
+**`UndoRedo.get_history_count()` 不增长,不代表动作没被记录。**
+
+我一度以为编辑器的 undo 历史有 24 条上限(观察到计数 `24 → 24` 但动作确实
+在栈顶且能撤销)。**那个结论是错的**,后来实测推翻了:
+
+```
+max_steps = 0              # 0 = 无限
+提交 30 次 → count = 30
+一共能撤销 30 步
+```
+
+真实机制是 **redo 分支截断**:
+
+```
+提交 3 次            → count = 3
+撤销 1 次            → count = 3,has_redo = true
+在撤销状态下再提交    → count = 3,栈顶 = 新动作,has_redo = false
+```
+
+新动作把那条作废的 redo 分支顶掉了,一进一出,计数持平。
+之前那次观察正是发生在一串 undo/redo 之后。
+
+结论不变但理由变了:**拿"计数有没有 +1"断言"动作被记下来了"不可靠** ——
+该验行为(真的 undo 一次看看),或者看 `get_current_action_name()`。
 
 ---
 

@@ -48,6 +48,7 @@ func _run() -> void:
 	await _test_mouth_auto_rebuild()
 	await _test_after_and_pause_then_stop()
 	await _test_freed_target_node()
+	await _test_play_resume()
 
 	print("\n=== %d 通过 / %d 失败 ===" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
@@ -752,3 +753,62 @@ func _test_freed_target_node() -> void:
 	_cue.stop()
 	mouth.queue_free()
 	await process_frame
+
+func _test_play_resume() -> void:
+	print("\n[Cue] play() 省略参数时从当前播放头继续")
+	# 以前默认值是 0.0,于是 seek(5) 之后 play() 会莫名回到开头 ——
+	# 每个媒体播放器都不会这么干。
+	var sheet := _sheet([[&"early", 0.10], [&"late", 1.50]])
+	_cue.load_sheet(sheet)
+
+	# 刚 load 完播放头在 0,play() 行为不变
+	_cue.play()
+	await _advance(2)
+	ok(_cue.time() < 0.30, "刚 load 完 play() 仍然从 0 开始(%.3f)" % _cue.time())
+	_cue.stop()
+
+	# seek 之后 play() 必须从那里继续
+	_cue.seek(1.0)
+	_cue.play()
+	await _advance(2)
+	ok(_cue.time() >= 1.0, "seek(1.0) 之后 play() 从 1.0 继续(%.3f)" % _cue.time())
+	_cue.stop()
+
+	# 显式传参仍然精确生效
+	_cue.play(0.5)
+	await _advance(1)
+	ok(_cue.time() >= 0.5 and _cue.time() < 0.9,
+		"play(0.5) 从 0.5 开始(%.3f)" % _cue.time())
+	_cue.stop()
+
+	# 播完之后再 play():不能在结尾原地立刻结束,要从头来
+	var dur := sheet.duration()
+	ok(dur > 0.0, "这个 sheet 有时长(%.2f)" % dur)
+	_cue.seek(dur)
+	_cue.play()
+	await _advance(2)
+	ok(_cue.time() < dur * 0.5,
+		"播放头已在末尾时 play() 从头开始(%.3f,总长 %.2f)" % [_cue.time(), dur])
+	_cue.stop()
+
+	# 负数当作"从当前位置"
+	_cue.seek(0.8)
+	_cue.play(-1.0)
+	await _advance(1)
+	ok(_cue.time() >= 0.8, "play(-1.0) 等同于省略参数(%.3f)" % _cue.time())
+	_cue.stop()
+
+	# 剧本骨架生成的是无参 play(),必须还能从头正常跑
+	_cue.load_sheet(_sheet([[&"a", 0.1], [&"b", 0.3]]))
+	var order: Array[String] = []
+	var task := func() -> void:
+		await _cue.at(&"a"); order.append("a")
+		await _cue.at(&"b"); order.append("b")
+	task.call()
+	_cue.play()
+	for i in 40:
+		await process_frame
+		if order.size() >= 2:
+			break
+	ok(order == ["a", "b"], "生成的剧本骨架(load_sheet + play())照常工作:%s" % [order])
+	_cue.stop()

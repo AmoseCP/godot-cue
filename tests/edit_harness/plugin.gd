@@ -81,7 +81,7 @@ func _run() -> void:
 				panel.call("_delete_marker", m3)
 				names.remove_at(0)
 		await get_tree().process_frame
-		# 同上:历史到顶之后计数不再涨,所以也认"我们的动作在栈顶"
+		# 同上:计数可能因 redo 分支截断而持平,所以也认"我们的动作在栈顶"
 		var grew := ur.get_history_count() > depth_before \
 			or ur.get_current_action_name().begins_with("Cue:")
 		_ok(grew, "第 %d 次编辑(类型 %d)应该产生一条 undo 记录" % [i, i % 5])
@@ -269,8 +269,9 @@ func _run() -> void:
 	await get_tree().process_frame
 	_ok(sheet.segments.size() == n_seg_before + 1,
 		"添加片段(%d → %d)" % [n_seg_before, sheet.segments.size()])
-	# 计数不可靠:编辑器的 undo 历史有深度上限(实测 24),到顶之后
-	# 新动作会挤掉最旧的,get_history_count() 就不再增长了。
+	# 计数不可靠:在撤销状态下提交新动作会截断作废的 redo 分支,
+	# 一进一出,get_history_count() 持平。(不是历史上限 ——
+	# max_steps 实测为 0,即无限;见 docs/godot-4.7-notes.md。)
 	# 所以一律验行为 —— 能不能真的撤销回去。
 	ur.undo()
 	await get_tree().process_frame

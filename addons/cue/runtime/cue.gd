@@ -143,14 +143,30 @@ func is_movie_mode() -> bool:
 	return _clock != null and _clock.is_movie_mode()
 
 
-func play(from: float = 0.0) -> void:
+## 开始播放。
+##
+## [param from] 省略(或为负)时[b]从当前播放头继续[/b] ——
+## `Cue.seek(5.0)` 之后 `Cue.play()` 会从 5 秒开始,而不是从头。
+## 以前默认值是 0.0,于是 seek 完再 play 会莫名其妙回到开头;
+## 那是每个媒体播放器都不会这么干的事。
+##
+## 一个例外:如果当前播放头已经在(或超过)末尾,`play()` 从头开始 ——
+## 否则"播完之后再按播放"会在结尾原地立刻结束。
+func play(from: float = -1.0) -> void:
 	if _sheet == null:
 		push_error("Cue:还没有 load_sheet(),play() 无效。")
 		return
-	_seek_queue(from)
+	var start := from
+	if start < 0.0:
+		start = time()
+		var dur := _sheet.duration()
+		if dur > 0.0 and start >= dur - 0.001:
+			start = 0.0
+	start = maxf(start, 0.0)
+	_seek_queue(start)
 	_playing = true
-	_clock.start(from)
-	_start_segments_at(from)
+	_clock.start(start)
+	_start_segments_at(start)
 	set_process(true)
 
 
