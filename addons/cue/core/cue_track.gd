@@ -1,4 +1,5 @@
 @tool
+@icon("res://addons/cue/icons/cue_track.svg")
 class_name CueTrack extends Resource
 
 ## 一条标记轨道的元数据。轨道只是分组标签,不影响运行时查找。

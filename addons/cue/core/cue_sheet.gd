@@ -1,4 +1,5 @@
 @tool
+@icon("res://addons/cue/icons/cue_sheet.svg")
 class_name CueSheet extends Resource
 
 ## 一条统一的时间轴:若干段音频([CueAudioSegment])+ 它们上面的所有命名标记。

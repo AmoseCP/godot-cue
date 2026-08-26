@@ -1,4 +1,5 @@
 @tool
+@icon("res://addons/cue/icons/cue_segment.svg")
 class_name CueAudioSegment extends Resource
 
 ## sheet 时间轴上的一段音频。

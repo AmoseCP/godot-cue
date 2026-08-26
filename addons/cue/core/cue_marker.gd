@@ -1,4 +1,5 @@
 @tool
+@icon("res://addons/cue/icons/cue_marker.svg")
 class_name CueMarker extends Resource
 
 ## 音频时间轴上的一个命名标记。
