@@ -137,7 +137,37 @@ Cue 换成它之后,双次渲染仍然逐帧 SHA256 一致。
 
 ---
 
-## 6. `--write-movie` 会被引擎从命令行参数里吃掉
+## 6. `editor/movie_writer/fps` 在独立运行时不生效
+
+项目设置里写了 `editor/movie_writer/fps=30`,脚本里
+`ProjectSettings.get_setting("editor/movie_writer/fps")` 也确实读到 `30` ——
+但独立运行 `--write-movie` 时,Godot 打印的是:
+
+```
+Movie Maker mode enabled, recording movie in 1152×648 @ 60 FPS...
+```
+
+**它按 60fps 录。** 要真正控制录制帧率,必须显式传 `--fixed-fps 30`。
+
+这条的杀伤力在于:如果你的时间轴按 30fps 设计,却按 60fps 录出去,
+任何"帧数 ÷ 设计帧率"的时钟都会**走快一倍**。稳妥的做法是
+**从固定时间步反推真实帧率**,不依赖任何设置项 ——
+离线渲染下 Godot 强制固定时间步,所以 `_process(delta)` 里的 `delta`
+恰好是 `1/实际帧率`:
+
+```gdscript
+func _process(delta: float) -> void:
+    if OS.has_feature("movie"):
+        var real_fps := round(1.0 / delta)
+```
+
+注意守卫要用 `OS.has_feature("movie")`,不能用自己的"强制离线模式"标志 ——
+只有真在录影片时时间步才保证固定。headless 下帧率不受限,`delta` 是真实耗时
+(可能零点几毫秒),反推出来是上万的"帧率"。
+
+---
+
+## 7. `--write-movie` 会被引擎从命令行参数里吃掉
 
 `OS.has_feature("movie")` 在 `--write-movie` 下确实是 `true`,可以放心用。
 
@@ -150,7 +180,7 @@ MODE movie=true cmdline=["tests/determinism/main.tscn"]
 
 ---
 
-## 7. macOS 上 `AudioServer.get_output_latency()` 返回 0.0
+## 8. macOS 上 `AudioServer.get_output_latency()` 返回 0.0
 
 不只是 headless 的 Dummy 驱动 —— 用真实的 **CoreAudio** 驱动也返回 `0.0`:
 
@@ -168,7 +198,7 @@ CoreAudio 实际输出延迟通常有 10~20ms,这部分**不会**被自动补偿
 
 ---
 
-## 8. 插件脚本里不能直接引用自动加载的全局标识符
+## 9. 插件脚本里不能直接引用自动加载的全局标识符
 
 插件的脚本扫描早于自动加载注册,所以在 `addons/` 下的脚本里直接写
 
@@ -190,7 +220,7 @@ var cue := get_node_or_null(cue_path)
 
 ---
 
-## 9. GDScript 的 lambda 按值捕获局部变量
+## 10. GDScript 的 lambda 按值捕获局部变量
 
 ```gdscript
 var flag := false
@@ -208,7 +238,7 @@ lam.call()
 
 ---
 
-## 10. 进程退出时带活跃 WAV 播放会报"资源仍在使用"
+## 11. 进程退出时带活跃 WAV 播放会报"资源仍在使用"
 
 ```
 WARNING: 2 ObjectDB instances were leaked at exit.

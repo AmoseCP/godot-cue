@@ -1,15 +1,25 @@
 @tool
 class_name CuePanel extends VBoxContainer
 
-## 底部面板根节点。持有视图状态、编辑器音频播放器,并且是[b]唯一[/b]
-## 执行编辑操作的地方 —— 所有改动都经过 [EditorUndoRedoManager]
-## (见 CLAUDE.md:没有 undo 的编辑功能视为未完成)。
+## 底部面板根节点:布局、sheet 生命周期、预览播放、对话框。
+##
+## 两块重活拆出去了 —— 面板一度同时管布局、播放、对话框、编辑、
+## 波形分析和频谱作业六七件事:
+##
+## - [CueEditOps] —— 所有会改 sheet 的操作,每一个都走 [EditorUndoRedoManager]
+##   (见 CLAUDE.md:没有 undo 的编辑功能视为未完成)
+## - [CueAnalysisJobs] —— 波形/包络分析与按需频谱图这两类长任务
+##
+## 面板仍然是**唯一的对外入口**:下面那些转发方法保持原样,
+## 这样调用方(以及 tests/edit_harness)不必关心内部怎么拆的。
 
 const CueViewStateScript := preload("res://addons/cue/editor/cue_view_state.gd")
 
 var state: CueViewState = null
 
 var _undo: EditorUndoRedoManager = null
+var _ops: CueEditOps = null
+var _jobs: CueAnalysisJobs = null
 var _transport: CueTransport = null
 var _ruler: CueRuler = null
 var _view: CueWaveformView = null
@@ -24,10 +34,6 @@ var _open_dialog: EditorFileDialog = null
 var _import_dialog: EditorFileDialog = null
 var _script_dialog: EditorFileDialog = null
 var _export_kind: int = -1
-## 频谱图相关。PCM 源按片段路径缓存 —— 每次平移都重读 26MB 文件太浪费。
-var _pcm_cache: Dictionary = {}
-var _spec_job: int = 0
-var _spec_pending: bool = false
 var _spec_timer: SceneTreeTimer = null
 var _segment_dialog: EditorFileDialog = null
 var _dirty: bool = false
@@ -135,6 +141,13 @@ func _ready() -> void:
 		if not _syncing:
 			state.scroll_to(v))
 
+	_ops = CueEditOps.new(_undo, state)
+	_jobs = CueAnalysisJobs.new(state)
+	_jobs.progress.connect(func(r: float) -> void: _transport.show_progress(r))
+	_jobs.spectrogram_ready.connect(func(i: int, tex: ImageTexture) -> void:
+		_view.set_spectrogram(i, tex))
+	_jobs.spectrogram_busy.connect(func(b: bool) -> void: _view.set_spectrogram_pending(b))
+
 	set_process(false)
 
 
@@ -150,8 +163,8 @@ func _exit_tree() -> void:
 
 func open_sheet(sheet: CueSheet) -> void:
 	_stop()
-	_pcm_cache.clear()
-	_spec_job += 1
+	if _jobs != null:
+		_jobs.reset()
 	if _view != null:
 		_view.clear_spectrograms()
 	var old := state.sheet
@@ -207,85 +220,13 @@ func _mark_dirty() -> void:
 ## 不该把整集其他角色的波形也重扫一遍(这是 D10′ 保留"局部重渲"诉求的落点)。
 func analyze_waveform(force: bool = false) -> void:
 	var sheet := state.sheet
-	if sheet == null or _analyzing:
+	if not await _jobs.analyze(sheet, force):
 		return
-
-	# 旧的单音频 sheet 在这里就地升级成 segments 形式
-	sheet.migrate_legacy()
-
-	var segs := sheet.all_segments()
-	if segs.is_empty():
-		push_error("Cue:这个 CueSheet 还没有音频片段。请在 Inspector 里往 segments 加一段。")
+	if state.sheet != sheet:
 		return
-
-	_analyzing = true
-	var builder := CueWaveformBuilder.new()
-	var done := 0
-	var failed := PackedStringArray()
-
-	for seg in segs:
-		if not force and seg.has_waveform() and not seg.waveform_stale():
-			done += 1
-			_transport.show_progress(float(done) / float(segs.size()))
-			continue
-		var src := CuePcmReader.open(seg.path, seg.stream)
-		if not src.ok():
-			failed.append(src.error)
-			done += 1
-			continue
-		# 多段时进度条要横跨所有段,不能每段都从 0 走一遍
-		var base := float(done) / float(segs.size())
-		var span := 1.0 / float(segs.size())
-		var cb := func(r: float) -> void: _transport.show_progress(base + r * span)
-		builder.progress.connect(cb)
-		var cache: WaveformCache = await builder.build_async(src)
-		builder.progress.disconnect(cb)
-		cache.source_hash = WaveformCache.compute_hash(seg.path)
-		if state.sheet != sheet:
-			_analyzing = false        # 分析期间用户换了 sheet
-			return
-		seg.waveform = cache
-		done += 1
-
-	_analyzing = false
-	_transport.show_progress(1.0)
-	for e in failed:
-		push_error(e)
-
-	# 包络跨全部片段,从各段的峰值缓存拼出来
-	sheet.envelope = _build_envelope(sheet)
 	_mark_dirty()
 	state.notify_sheet_edited()
 	state.zoom_fit()
-
-
-## 把各片段的峰值缓存按 offset 拼成一条覆盖整条时间轴的包络。
-func _build_envelope(sheet: CueSheet) -> CueEnvelope:
-	var segs := sheet.all_segments()
-	var dur := sheet.duration()
-	if segs.is_empty() or dur <= 0.0:
-		return null
-	var rate := CueEnvelopeBuilder.DEFAULT_RATE
-	var out := CueEnvelope.new()
-	out.rate = rate
-	out.duration = dur
-	var vals := PackedFloat32Array()
-	vals.resize(maxi(int(ceil(dur * rate)), 1))
-	for seg in segs:
-		if not seg.has_waveform():
-			continue
-		var part := CueEnvelopeBuilder.from_cache(seg.waveform, rate)
-		var base := int(round(seg.offset * rate))
-		for i in part.values.size():
-			var j := base + i
-			if j < 0 or j >= vals.size():
-				continue
-			# 片段重叠时取较大者,而不是相加 —— 相加会让重叠处虚高
-			vals[j] = maxf(vals[j], part.values[i])
-	out.values = vals
-	if segs.size() > 0 and segs[0].waveform != null:
-		out.source_hash = segs[0].waveform.source_hash
-	return CueEnvelopeBuilder.normalized(out)
 
 
 # ── 播放 ────────────────────────────────────────────────────────────
@@ -342,75 +283,6 @@ func _process(_delta: float) -> void:
 	state.follow_playhead()
 
 
-# ── 编辑操作(全部走 undo)──────────────────────────────────────────
-
-func _add_marker(t: float) -> void:
-	var sheet := state.sheet
-	if sheet == null or _undo == null:
-		return
-	var track := state.active_track
-	if track == &"" or not sheet.track_names().has(track):
-		track = sheet.track_names()[0]
-	var m := CueMarker.new(sheet.unique_name(StringName(String(track))), t, track)
-	_undo.create_action("Cue:添加标记", UndoRedo.MERGE_DISABLE, sheet)
-	_undo.add_do_method(sheet, "add_marker", m)
-	_undo.add_undo_method(sheet, "remove_marker", m)
-	_undo.add_do_method(sheet, "touch")
-	_undo.add_undo_method(sheet, "touch")
-	_undo.commit_action()
-	_view.select(m)
-	_begin_rename(m)
-
-
-func _delete_marker(m: CueMarker) -> void:
-	var sheet := state.sheet
-	if sheet == null or _undo == null or m == null:
-		return
-	var idx := sheet.index_of(m)
-	_undo.create_action("Cue:删除标记「%s」" % m.name, UndoRedo.MERGE_DISABLE, sheet)
-	_undo.add_do_method(sheet, "remove_marker", m)
-	_undo.add_undo_method(sheet, "insert_marker", m, idx)
-	_undo.add_do_method(sheet, "touch")
-	_undo.add_undo_method(sheet, "touch")
-	_undo.commit_action()
-	_view.select(null)
-
-
-func _move_marker(m: CueMarker, from_t: float, to_t: float) -> void:
-	if state.sheet == null or _undo == null:
-		return
-	_undo.create_action("Cue:移动标记「%s」" % m.name, UndoRedo.MERGE_DISABLE, state.sheet)
-	_undo.add_do_method(state.sheet, "set_marker_time", m, to_t)
-	_undo.add_undo_method(state.sheet, "set_marker_time", m, from_t)
-	_undo.commit_action()
-
-
-func _rename_marker(m: CueMarker, new_name: StringName) -> void:
-	if state.sheet == null or _undo == null or m.name == new_name:
-		return
-	if new_name == &"":
-		push_error("Cue:标记名不能为空。")
-		return
-	var existing := state.sheet.find(new_name)
-	if existing != null and existing != m:
-		push_error("Cue:已经有名为「%s」的标记了。同一个 sheet 内标记名必须唯一。" % new_name)
-		return
-	_undo.create_action("Cue:重命名标记「%s」" % m.name, UndoRedo.MERGE_DISABLE, state.sheet)
-	_undo.add_do_method(state.sheet, "set_marker_name", m, new_name)
-	_undo.add_undo_method(state.sheet, "set_marker_name", m, m.name)
-	_undo.commit_action()
-
-
-## sheet 的 changed 信号处理器 —— do 和 undo 都会经过这里
-## (undo 动作里调的是 CueSheet.touch(),它发 changed)。
-func _after_edit() -> void:
-	_mark_dirty()
-	if state != null:
-		state.notify_sheet_edited()
-	if is_instance_valid(_view):
-		_view.queue_redraw()
-
-
 # ── 行内改名 ────────────────────────────────────────────────────────
 
 func _begin_rename(m: CueMarker) -> void:
@@ -457,50 +329,23 @@ func _import_dialog_show() -> void:
 
 ## 解析并作为[b]一次[/b] undo 动作写入 —— 导入 200 个口型标记后按一次
 ## Ctrl+Z 就该全部消失,而不是按 200 次。
+## 解析并作为[b]一次[/b] undo 动作写入(实现见 [method CueEditOps.import_markers])。
 func import_file(path: String) -> void:
-	var sheet := state.sheet
-	if sheet == null or _undo == null:
+	if state.sheet == null:
 		return
 	var res: CueImportResult
 	if path.get_extension().to_lower() == "json":
-		# Cue 自己导出的标记 JSON 和 Rhubarb 的都是 .json,
-		# 靠顶层字段区分:有 cue_format 就是自己人。
 		res = _sniff_json(path)
 	else:
 		res = CueTextGridImporter.parse(path)
 	if not res.ok():
 		push_error(res.error)
 		return
-
-	# 重名在导入这一步就解决掉,保证 sheet 内名字唯一(PLAN 4.3)。
-	var taken := {}
-	for m in sheet.markers:
-		taken[m.name] = true
-	for m in res.markers:
-		var n := m.name
-		var i := 1
-		while taken.has(n):
-			n = StringName("%s_%d" % [m.name, i])
-			i += 1
-		m.name = n
-		taken[n] = true
-
-	_undo.create_action("Cue:导入 %s(%d 个标记)" % [path.get_file(), res.markers.size()],
-		UndoRedo.MERGE_DISABLE, sheet)
-	for m in res.markers:
-		_undo.add_do_method(sheet, "add_marker", m)
-	# 撤销时倒着删,顺序才对得上
-	for i in range(res.markers.size() - 1, -1, -1):
-		_undo.add_undo_method(sheet, "remove_marker", res.markers[i])
-	_undo.add_do_method(sheet, "touch")
-	_undo.add_undo_method(sheet, "touch")
-	_undo.commit_action()
-
-	_ensure_tracks(res.tracks)
+	_ops.import_markers(res, path.get_file())
 	print("Cue:", res.summary())
 
 
-## 分辨 .json 是 Cue 自己导出的还是 Rhubarb 的。
+## 分辨 .json 是 Cue 自己导出的还是 Rhubarb 的:看顶层有没有 cue_format。
 func _sniff_json(path: String) -> CueImportResult:
 	if FileAccess.file_exists(path):
 		var head := FileAccess.get_file_as_string(path).substr(0, 400)
@@ -509,25 +354,52 @@ func _sniff_json(path: String) -> CueImportResult:
 	return CueRhubarbImporter.parse(path)
 
 
-## 导入带进来的新轨道要有个颜色,否则全挤在默认色上分不清。
-func _ensure_tracks(names: PackedStringArray) -> void:
-	var sheet := state.sheet
-	var existing := {}
-	for t in sheet.tracks:
-		existing[t.name] = true
-	var palette := [
-		Color(0.40, 0.70, 1.00), Color(1.00, 0.65, 0.30), Color(0.55, 0.90, 0.55),
-		Color(0.90, 0.55, 0.90), Color(0.95, 0.85, 0.40),
-	]
-	for n in names:
-		var sn := StringName(n)
-		if existing.has(sn):
-			continue
-		sheet.tracks.append(CueTrack.new(sn, palette[sheet.tracks.size() % palette.size()]))
-	state.notify_sheet_edited()
+# ── 编辑操作:全部转发给 CueEditOps ────────────────────────────────
+#
+# 这几个方法保持原名原签名 —— 它们是面板的对外入口,
+# tests/edit_harness 直接 call 它们。
+
+func _add_marker(t: float) -> void:
+	var m := _ops.add_marker(t)
+	if m != null:
+		_view.select(m)
+		_begin_rename(m)
 
 
-# ── 片段编辑(全部走 undo)────────────────────────────────────────
+func _delete_marker(m: CueMarker) -> void:
+	_ops.delete_marker(m)
+	_view.select(null)
+
+
+func _move_marker(m: CueMarker, from_t: float, to_t: float) -> void:
+	_ops.move_marker(m, from_t, to_t)
+
+
+func _rename_marker(m: CueMarker, new_name: StringName) -> void:
+	_ops.rename_marker(m, new_name)
+
+
+func add_segment_from(path: String) -> void:
+	if state.sheet == null:
+		return
+	# 新片段落在播放头处 —— 多角色分轨时通常就是"从这里开始接话"
+	var seg := CueAudioSegment.new(
+		StringName(path.get_file().get_basename()), path,
+		state.maybe_snap(state.playhead))
+	seg.stream = ResourceLoader.load(path) as AudioStream
+	_ops.add_segment(seg)
+	_view.select_segment(seg)
+	analyze_waveform()
+
+
+func _remove_segment(seg: CueAudioSegment) -> void:
+	if _ops.remove_segment(seg):
+		_view.select_segment(null)
+
+
+func _move_segment(seg: CueAudioSegment, from_off: float, to_off: float) -> void:
+	_ops.move_segment(seg, from_off, to_off)
+
 
 func _audio_action(action: int) -> void:
 	if state.sheet == null:
@@ -543,7 +415,7 @@ func _audio_action(action: int) -> void:
 			if seg == null:
 				push_error("Cue:先在波形上点一下某个片段的把手,选中它。")
 				return
-			_move_segment(seg, seg.offset, state.maybe_snap(state.playhead))
+			_ops.move_segment(seg, seg.offset, state.maybe_snap(state.playhead))
 		CueTransport.Audio.REANALYZE:
 			analyze_waveform(true)
 
@@ -562,137 +434,49 @@ func _segment_dialog_show() -> void:
 	_segment_dialog.popup_centered_ratio(0.6)
 
 
-## 新片段落在播放头处 —— 多角色分轨时通常就是"从这里开始接话"。
-func add_segment_from(path: String) -> void:
-	var sheet := state.sheet
-	if sheet == null or _undo == null:
-		return
-	sheet.migrate_legacy()
-	var seg := CueAudioSegment.new(
-		StringName(path.get_file().get_basename()), path,
-		state.maybe_snap(state.playhead))
-	seg.stream = ResourceLoader.load(path) as AudioStream
-
-	_undo.create_action("Cue:添加音频片段「%s」" % seg.label(),
-		UndoRedo.MERGE_DISABLE, sheet)
-	_undo.add_do_method(sheet, "add_segment", seg)
-	_undo.add_undo_method(sheet, "remove_segment", seg)
-	_undo.commit_action()
-
-	_view.select_segment(seg)
-	analyze_waveform()
+## sheet 的 changed 信号处理器 —— do 和 undo 都会经过这里
+## (undo 动作里调的是 CueSheet.touch(),它发 changed)。
+func _after_edit() -> void:
+	_mark_dirty()
+	if state != null:
+		state.notify_sheet_edited()
+	if is_instance_valid(_view):
+		_view.queue_redraw()
 
 
-func _remove_segment(seg: CueAudioSegment) -> void:
-	var sheet := state.sheet
-	if sheet == null or _undo == null:
-		return
-	if seg == null:
-		push_error("Cue:先在波形上点一下某个片段的把手,选中它。")
-		return
-	if sheet.segments.size() <= 1 and not sheet.segments.is_empty():
-		push_error("Cue:这是最后一个片段。CueSheet 至少要有一段音频。")
-		return
-	var idx := sheet.index_of_segment(seg)
-	if idx < 0:
-		return
-	_undo.create_action("Cue:移除音频片段「%s」" % seg.label(),
-		UndoRedo.MERGE_DISABLE, sheet)
-	_undo.add_do_method(sheet, "remove_segment", seg)
-	_undo.add_undo_method(sheet, "insert_segment", seg, idx)
-	_undo.commit_action()
-	_view.select_segment(null)
-
-
-func _move_segment(seg: CueAudioSegment, from_off: float, to_off: float) -> void:
-	if state.sheet == null or _undo == null or seg == null:
-		return
-	if is_equal_approx(from_off, to_off):
-		return
-	_undo.create_action("Cue:移动片段「%s」" % seg.label(),
-		UndoRedo.MERGE_DISABLE, state.sheet)
-	_undo.add_do_method(state.sheet, "set_segment_offset", seg, to_off)
-	_undo.add_undo_method(state.sheet, "set_segment_offset", seg, from_off)
-	_undo.commit_action()
-
-
-# ── 频谱图 ──────────────────────────────────────────────────────────
+# ── 频谱图:调度在这里,实现在 CueAnalysisJobs ────────────────────
 
 func _on_spectrogram_toggled(on: bool) -> void:
 	_view.clear_spectrograms()
 	if on:
 		_schedule_spectrogram()
 	else:
-		_spec_pending = false
-		_view.set_spectrogram_pending(false)
+		_jobs.cancel_spectrogram()
 		state.notify_sheet_edited()          # 让波形线段重建
 	_view.queue_redraw()
 
 
 ## 视图一变就重算频谱代价太大(一屏约 240ms),所以拖动/缩放时先攒着,
 ## 停手 0.15 秒再算。这期间旧图继续显示,不会闪。
+## 视图一变就重算频谱代价太大(一屏约 320ms),所以拖动/缩放时先攒着,
+## 停手 0.15 秒再算。这期间旧图继续显示,不会闪。
 func _schedule_spectrogram() -> void:
 	if not state.spectrogram or state.sheet == null:
 		return
-	_spec_job += 1
-	var job := _spec_job
 	if _spec_timer != null and is_instance_valid(_spec_timer):
 		_spec_timer.timeout.disconnect(_run_spectrogram)
 	_spec_timer = get_tree().create_timer(0.15)
-	_spec_timer.timeout.connect(_run_spectrogram.bind(job), CONNECT_ONE_SHOT)
+	_spec_timer.timeout.connect(_run_spectrogram, CONNECT_ONE_SHOT)
 
 
-func _run_spectrogram(job: int) -> void:
-	if job != _spec_job or not state.spectrogram or state.sheet == null:
+func _run_spectrogram() -> void:
+	if not state.spectrogram or state.sheet == null:
 		return
-	var segs := state.sheet.all_segments()
-	if segs.is_empty():
-		return
-
-	_spec_pending = true
-	_view.set_spectrogram_pending(true)
-	var cols: int = clampi(int(_view.size.x * 0.5), 32, 480)
 	var theme := EditorInterface.get_editor_theme()
-	var low := theme.get_color("dark_color_2", "Editor")
-	var mid := theme.get_color("accent_color", "Editor")
-	var high := theme.get_color("font_color", "Editor")
-
-	for si in segs.size():
-		if job != _spec_job:
-			return                            # 期间又变了,这次作废
-		var seg := segs[si]
-		var src := _pcm_for(seg)
-		if src == null or not src.ok():
-			continue
-		# 只算这段音频在当前视野里露出来的那部分
-		var t0: float = maxf(state.scroll_sec - seg.offset, 0.0)
-		var t1: float = minf(state.x_to_time(_view.size.x) - seg.offset, seg.length())
-		if t1 <= t0:
-			continue
-		var spec := CueSpectrogram.new()
-		var img: Image = await spec.build_async(src, t0, t1, cols)
-		if job != _spec_job:
-			return
-		if img != null:
-			_view.set_spectrogram(si, CueSpectrogram.colorize(img, low, mid, high))
-
-	_spec_pending = false
-	_view.set_spectrogram_pending(false)
-
-
-## 频谱图需要原始 PCM(峰值缓存里没有相位信息),而重读文件很贵,
-## 所以按路径缓存。关掉频谱视图时清掉,免得一直占着几十兆。
-func _pcm_for(seg: CueAudioSegment) -> CuePcmReader.Source:
-	var key := seg.path if seg.path != "" else str(seg.get_instance_id())
-	if _pcm_cache.has(key):
-		return _pcm_cache[key]
-	var src := CuePcmReader.open(seg.path, seg.stream)
-	if not src.ok():
-		push_error(src.error)
-		_pcm_cache[key] = null
-		return null
-	_pcm_cache[key] = src
-	return src
+	_jobs.run_spectrogram(_view.size.x,
+		theme.get_color("dark_color_2", "Editor"),
+		theme.get_color("accent_color", "Editor"),
+		theme.get_color("font_color", "Editor"))
 
 
 # ── 生成剧本骨架 ────────────────────────────────────────────────────

@@ -41,6 +41,7 @@ func _run() -> void:
 	await _test_mouth_shape_payload()
 	await _test_mouth_shape_amplitude()
 	await _test_multi_segment()
+	await _test_render_fps_calibration()
 
 	print("\n=== %d 通过 / %d 失败 ===" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
@@ -450,3 +451,35 @@ func _test_multi_segment() -> void:
 	await _advance(2)
 	ok(_cue.time() >= 2.2, "从第二段中间起播,时间正确(%.3f)" % _cue.time())
 	_cue.stop()
+
+
+func _test_render_fps_calibration() -> void:
+	print("\n[CueClock] 用实际渲染帧率校准离线时钟")
+	# sheet 说 30fps,但影片按 60fps 录 —— 不校准的话时间会走快一倍
+	# 反推本身是纯函数,可以脱离运行环境测
+	near(CueClock.fps_from_delta(1.0 / 60.0), 60.0, 1e-6, "1/60 → 60fps")
+	near(CueClock.fps_from_delta(1.0 / 30.0), 30.0, 1e-6, "1/30 → 30fps")
+	near(CueClock.fps_from_delta(1.0 / 24.0), 24.0, 1e-6, "1/24 → 24fps")
+	near(CueClock.fps_from_delta(0.0), 0.0, 1e-6, "delta 为 0 → 0(不可用)")
+	near(CueClock.fps_from_delta(-1.0), 0.0, 1e-6, "负 delta → 0")
+	near(CueClock.fps_from_delta(2.0), 0.0, 1e-6, "delta 大于 1 秒 → 0(不可信)")
+
+	var c := CueClock.new(30.0, null)
+	eq(c.render_fps(), 30.0, "还没测到时用 sheet 的 fps")
+
+	# 关键守卫:不是真在录影片时,observe_delta 必须什么都不做。
+	# headless 下帧率不受限,delta 是真实耗时,反推出来是上万的"帧率",
+	# 照单全收会让时钟直接停摆(这条是踩过之后补的)。
+	c.observe_delta(1.0 / 6000.0)
+	eq(c.render_fps(), 30.0, "非录制环境下忽略 delta,不会被离谱的帧率污染")
+
+	# 校准生效之后时间按实际帧率走 —— 直接设内部值来验这一段
+	var c3 := CueClock.new(30.0, null)
+	c3.set("_render_fps", 60.0)
+	eq(c3.render_fps(), 60.0, "校准后的帧率")
+	c3.start(0.0)
+	var f0 := Engine.get_process_frames()
+	await _advance(6)
+	var elapsed := Engine.get_process_frames() - f0
+	near(c3.now(), float(elapsed) / 60.0, 1e-6,
+		"走了 %d 帧 → %.4fs(按 60fps 而不是 30fps)" % [elapsed, c3.now()])

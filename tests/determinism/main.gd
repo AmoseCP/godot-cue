@@ -21,7 +21,7 @@ func _ready() -> void:
 	print("MODE Cue.is_movie_mode()=", Cue.is_movie_mode())
 	Cue.play()
 	_run()
-	Cue.finished.connect(_on_done)
+
 
 
 func _run() -> void:
@@ -33,8 +33,13 @@ func _run() -> void:
 		_color = Color.from_hsv(fmod(float(_fired.size()) * 0.17, 1.0), 0.6, 0.35)
 
 
+const LAST_FRAME := 90
+
+
 func _process(_delta: float) -> void:
 	queue_redraw()
+	if Cue.is_movie_mode() and Engine.get_frames_drawn() >= LAST_FRAME:
+		_on_done()
 
 
 func _draw() -> void:

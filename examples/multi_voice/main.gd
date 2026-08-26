@@ -20,8 +20,11 @@ func _ready() -> void:
 	Cue.load_sheet(SHEET)
 	Cue.play()
 	_scene()
+	# 离线渲染时按[b]固定帧号[/b]收尾,不用 Cue.finished 信号 ——
+	# 信号触发的时刻和"已经写出多少帧"之间没有硬绑定,
+	# 收尾帧数会浮动,逐帧比对就不稳。帧号是确定的,信号不是。
 	if Cue.is_movie_mode():
-		Cue.finished.connect(func() -> void: get_tree().quit())
+		set_process(true)
 
 
 func _scene() -> void:
@@ -42,7 +45,12 @@ func _beat(line: String, who: Dictionary) -> void:
 	t.tween_method(func(v: float) -> void: who["scale"] = v, 1.18, 1.0, 0.25)
 
 
+const LAST_FRAME := 102
+
+
 func _process(_delta: float) -> void:
+	if Cue.is_movie_mode() and Engine.get_frames_drawn() >= LAST_FRAME:
+		get_tree().quit()
 	# 高亮"这一刻哪段音频在响" —— segment_at() 是纯查询,不读播放器状态
 	var t: float = Cue.time()
 	var seg := SHEET.segment_at(t)

@@ -297,9 +297,11 @@ func _seek_queue(t: float) -> void:
 		_next += 1
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	if not _playing:
 		return
+	# 必须在读 time() 之前校准 —— 否则第一帧会用错的帧率算一次
+	_clock.observe_delta(delta)
 	var t := time()
 
 	# 时间到了就把还没起播的片段拉起来

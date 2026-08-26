@@ -66,8 +66,11 @@ func _ready() -> void:
 	_amp_mouth.rebuild()
 	_report()
 
+	# 离线渲染时按[b]固定帧号[/b]收尾,不用 Cue.finished 信号 ——
+	# 信号触发的时刻和"已经写出多少帧"之间没有硬绑定,
+	# 收尾帧数会浮动,逐帧比对就不稳。帧号是确定的,信号不是。
 	if Cue.is_movie_mode():
-		Cue.finished.connect(func() -> void: get_tree().quit())
+		set_process(true)
 
 
 func _report() -> void:
@@ -124,8 +127,13 @@ func _draw_mouth(w: float, h: float, teeth: bool) -> ImageTexture:
 	return ImageTexture.create_from_image(img)
 
 
+const LAST_FRAME := 120
+
+
 func _process(_delta: float) -> void:
 	queue_redraw()
+	if Cue.is_movie_mode() and Engine.get_frames_drawn() >= LAST_FRAME:
+		get_tree().quit()
 
 
 func _draw() -> void:

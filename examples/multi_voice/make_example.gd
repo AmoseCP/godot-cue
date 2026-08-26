@@ -76,21 +76,8 @@ func _sheet() -> void:
 	]:
 		sheet.add_marker(CueMarker.new(d[0], d[1], d[2]))
 
-	# 包络跨全部片段拼出来
-	var env := CueEnvelope.new()
-	env.rate = CueEnvelopeBuilder.DEFAULT_RATE
-	env.duration = sheet.duration()
-	var vals := PackedFloat32Array()
-	vals.resize(int(ceil(env.duration * env.rate)))
-	for seg in sheet.all_segments():
-		var part := CueEnvelopeBuilder.from_cache(seg.waveform, env.rate)
-		var base := int(round(seg.offset * env.rate))
-		for i in part.values.size():
-			var k := base + i
-			if k >= 0 and k < vals.size():
-				vals[k] = maxf(vals[k], part.values[i])
-	env.values = vals
-	sheet.envelope = CueEnvelopeBuilder.normalized(env)
+	# 包络跨全部片段拼出来(重叠处取较大者,见 CueEnvelopeBuilder.from_sheet)
+	sheet.envelope = CueEnvelopeBuilder.from_sheet(sheet)
 
 	print("写入 %s(%d 段,%d 标记,总长 %.2fs)→ %d"
 		% [SHEET, sheet.segments.size(), sheet.markers.size(), sheet.duration(),

@@ -22,8 +22,9 @@ docs/internal/
 
 # ── 测试产物 ────────────────────────────────────────────
 tests/results/
-tests/render_a/
-tests/render_b/
+# 渲染产物一律不进仓库。用通配符而不是逐个列 —— 之前只挡了 render_a/render_b,
+# 新加的 render_fps30/ 就漏进去了 186 个文件 2.5MB。
+tests/render_*/
 *.avi
 *.png.import
 

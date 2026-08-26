@@ -40,6 +40,8 @@ var _frozen: float = 0.0
 # 片段之间没有音频在响时的续推基准。
 var _wall_base: float = 0.0
 var _wall_start_us: int = 0
+## 实测到的渲染帧率。0 = 还没测到,先用 [member fps]。
+var _render_fps: float = 0.0
 
 
 func _init(p_fps: float = 30.0, p_player: AudioStreamPlayer = null) -> void:
@@ -89,6 +91,42 @@ static func extra_latency_seconds() -> float:
 	return 0.0
 
 
+## 用实际渲染帧率校准离线时钟。
+##
+## [b]为什么需要这个[/b]:CueSheet 的 fps 是**编辑器概念**(帧吸附、帧标尺),
+## 和 Movie Maker 实际录制的帧率没有任何强制关系。4.7.2 实测:
+## 项目设置 [code]editor/movie_writer/fps[/code] 读得到值,但**独立运行
+## `--write-movie` 时并不生效**,除非显式传 [code]--fixed-fps[/code];
+## 默认就是 60。于是一个 30fps 的 sheet 按 60fps 渲染出去,
+## 若拿 sheet.fps 当除数,时间会走得[b]快一倍[/b],整集动画全部提前。
+##
+## 离线模式下 Godot 强制固定时间步,所以 [param delta] 恰好是 1/实际帧率,
+## 由它反推最可靠 —— 不依赖任何设置项。
+## [b]守卫用的是 OS.has_feature("movie") 而不是 _movie[/b]:
+## 只有真正在录影片时 Godot 才强制固定时间步。测试里用 force_mode 假装离线
+## 时帧率并不受限,delta 是真实耗时(headless 下可能是零点几毫秒),
+## 拿它反推会得出上万的"帧率",时钟直接停摆。这条守卫踩过一次才加的。
+func observe_delta(delta: float) -> void:
+	if _render_fps > 0.0 or not OS.has_feature("movie"):
+		return
+	var measured := fps_from_delta(delta)
+	if measured > 0.0:
+		_render_fps = measured
+
+
+## 从固定时间步反推帧率。纯函数,单独抽出来是为了能脱离运行环境测。
+static func fps_from_delta(delta: float) -> float:
+	# 超过 1 秒的时间步不可能是真实的渲染帧率,当作测不到
+	if delta <= 0.0 or delta > 1.0:
+		return 0.0
+	return round(1.0 / delta)
+
+
+## 离线模式下每秒推进多少帧。
+func render_fps() -> float:
+	return _render_fps if _render_fps > 0.0 else fps
+
+
 func is_movie_mode() -> bool:
 	return _movie
 
@@ -125,7 +163,7 @@ func now() -> float:
 		return _frozen
 	if _movie:
 		# 纯帧计数 —— 不读任何音频状态,因此是确定性的。
-		return _start_offset + float(_frame_counter() - _start_frame) / fps
+		return _start_offset + float(_frame_counter() - _start_frame) / render_fps()
 	if player != null and player.playing and not player.stream_paused:
 		var t := anchor_offset + player.get_playback_position()
 		t += AudioServer.get_time_since_last_mix()

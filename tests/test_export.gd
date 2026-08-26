@@ -13,6 +13,7 @@ func _init() -> void:
 	_test_envelope_levels()
 	_test_envelope_normalize()
 	_test_envelope_export_files()
+	_test_envelope_from_sheet()
 	_test_generate_basic()
 	_test_generate_filter_and_escape()
 	_test_generated_script_compiles()
@@ -367,3 +368,32 @@ func _test_marker_csv() -> void:
 	# 帧号 = round(time * fps)
 	ok(lines[2].contains(",17,") or lines[2].contains(",16,"),
 		"0.55s @30fps → f16/f17:%s" % lines[2])
+
+
+func _test_envelope_from_sheet() -> void:
+	print("\n[包络] 跨片段拼接")
+	var sheet := CueSheet.new()
+	# 两段:0~1s 幅度 0.2,0.5~1.5s 幅度 0.8 —— 中间 0.5s 重叠
+	var a := CueAudioSegment.new(&"a", "", 0.0)
+	a.waveform = _cache(0.2, 0.2)
+	var b := CueAudioSegment.new(&"b", "", 0.5)
+	b.waveform = _cache(0.8, 0.8)
+	sheet.segments = [a, b] as Array[CueAudioSegment]
+
+	var env := CueEnvelopeBuilder.from_sheet(sheet, 20.0)
+	ok(env != null, "拼出了包络")
+	near(env.duration, 1.5, 1e-4, "时长覆盖两段")
+	near(env.peak(), 1.0, 0.02, "已归一化")
+
+	# 归一化前 a=0.2 / b=0.8,峰值 0.8 → 系数 1.25
+	near(env.at(0.2), 0.25, 0.03, "只有 a 的区间 → 0.2/0.8 = 0.25")
+	near(env.at(1.2), 1.0, 0.03, "只有 b 的区间 → 峰值")
+	# 关键:重叠处取较大者而不是相加,否则会是 (0.2+0.8)/0.8 = 1.25 被夹到 1,
+	# 且归一化会把非重叠段压暗
+	near(env.at(0.7), 1.0, 0.03, "重叠处取较大者(0.8)而不是相加(1.0)")
+
+	# 没有波形的片段不参与
+	var bare := CueSheet.new()
+	bare.segments = [CueAudioSegment.new(&"x", "", 0.0)] as Array[CueAudioSegment]
+	ok(CueEnvelopeBuilder.from_sheet(bare) == null, "全都没有波形时返回 null")
+	ok(CueEnvelopeBuilder.from_sheet(CueSheet.new()) == null, "空 sheet 返回 null")

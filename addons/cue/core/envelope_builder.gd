@@ -54,6 +54,45 @@ static func from_cache(wf: WaveformCache, rate: float = DEFAULT_RATE) -> CueEnve
 	return env
 
 
+## 把一个 sheet 的全部片段按 offset 拼成一条覆盖整条时间轴的包络。
+##
+## 重叠处取**较大者**而不是相加 —— 两个角色同时说话时相加会让重叠段虚高,
+## 之后归一化又把其余部分压暗,整条包络就废了。
+static func from_sheet(sheet: CueSheet, rate: float = DEFAULT_RATE) -> CueEnvelope:
+	var segs := sheet.all_segments()
+	var dur := sheet.duration()
+	if segs.is_empty() or dur <= 0.0 or rate <= 0.0:
+		return null
+
+	var out := CueEnvelope.new()
+	out.rate = rate
+	out.duration = dur
+	var vals := PackedFloat32Array()
+	vals.resize(maxi(int(ceil(dur * rate)), 1))
+
+	var any := false
+	for seg in segs:
+		if not seg.has_waveform():
+			continue
+		any = true
+		var part := from_cache(seg.waveform, rate)
+		var base := int(round(seg.offset * rate))
+		for i in part.values.size():
+			var j := base + i
+			if j < 0 or j >= vals.size():
+				continue
+			vals[j] = maxf(vals[j], part.values[i])
+	if not any:
+		return null
+
+	out.values = vals
+	for seg in segs:
+		if seg.waveform != null and seg.waveform.source_hash != "":
+			out.source_hash = seg.waveform.source_hash
+			break
+	return normalized(out)
+
+
 ## 归一化到峰值为 1。配音电平普遍偏低,不归一化的话阈值得逐个素材重调。
 static func normalized(env: CueEnvelope, headroom: float = 1.0) -> CueEnvelope:
 	var p := env.peak()
