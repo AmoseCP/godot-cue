@@ -17,6 +17,9 @@ extends Node
 signal marker_reached(marker_name: StringName)
 ## 播放到音频末尾。
 signal finished()
+## 换了 sheet。依赖 sheet 数据的节点(比如 [CueMouthShape])靠它自动刷新,
+## 免得每次 load_sheet() 之后都要手动去调一遍 rebuild()。
+signal sheet_loaded(sheet: CueSheet)
 
 var _sheet: CueSheet = null
 var _clock: CueClock = null
@@ -28,6 +31,13 @@ var _started: Array[bool] = []
 var _queue: Array[CueMarker] = []
 var _next: int = 0
 var _playing: bool = false
+## 播放轮次。stop() 和播放自然结束时 +1。
+##
+## [method at] 用它判断"这一轮播放是否已经作废",而[b]不是[/b]看
+## [member _playing] —— `_playing` 在"还没调 play()"和"暂停中"这两种情况下
+## 同样是 false,拿它当循环条件会让这两种情况下的 await [b]立刻返回[/b]:
+## 先起协程再 play()、或者暂停期间新起的 await,整段分镜会在一帧里跑完。
+var _generation: int = 0
 
 
 func _ready() -> void:
@@ -114,6 +124,7 @@ func load_sheet(sheet: CueSheet) -> void:
 	_clock = CueClock.new(float(sheet.fps), null)
 	_queue = sheet.sorted()
 	_next = 0
+	sheet_loaded.emit(sheet)
 
 
 func sheet() -> CueSheet:
@@ -122,6 +133,10 @@ func sheet() -> CueSheet:
 
 func clock() -> CueClock:
 	return _clock
+
+
+func is_playing() -> bool:
+	return _playing
 
 
 func is_movie_mode() -> bool:
@@ -173,22 +188,40 @@ func stop() -> void:
 		_clock.stop()
 	set_process(false)
 	if was:
-		# 唤醒所有还挂在 at() 上的协程,否则它们会永远等下去。
+		# 这一轮作废,唤醒所有还挂在 at() 上的协程,否则它们会永远等下去
+		_generation += 1
 		marker_reached.emit(&"")
 
 
-## 跳转到指定时间。已经过去的标记不会补触发。
+## 跳转到指定时间。
+##
+## [b]不会打断挂在 [method at] 上的协程[/b] —— 拖播放头、跳到某个节拍
+## 都是正常操作,不该让分镜脚本以为播放结束了。
+##
+## 向前跳时,被跨过去的标记按"已经过去"处理并逐个放行等待者 ——
+## 这与 [method at] 的既有规则一致(标记时间已过就立即返回),
+## 否则那些协程会永远等一个不会再来的信号。
 func seek(t: float) -> void:
 	if _sheet == null:
 		return
-	var was := _playing
-	stop()
-	if was:
-		play(t)
+	var from_t := time()
+	var skipped: Array[StringName] = []
+	if t > from_t:
+		for m in _queue:
+			if m.time > from_t and m.time <= t:
+				skipped.append(m.name)
+
+	# 先把时钟和队列摆到新位置,再放行 —— 顺序反了的话,
+	# 被唤醒的协程紧接着调 at() 时读到的还是旧时间。
+	_seek_queue(t)
+	_clock.start(t)
+	if _playing:
+		_start_segments_at(t)
 	else:
-		_seek_queue(t)
-		_clock.start(t)
 		_clock.stop()
+
+	for n in skipped:
+		marker_reached.emit(n)
 
 
 ## 当前 sheet 时间(秒)。运行时逻辑要取时间[b]只能[/b]走这里(见 CLAUDE.md 确定性要求)。
@@ -208,18 +241,22 @@ func frame() -> int:
 ##
 ## 标记不存在 → 报错并立即返回(不会死锁)。
 ## 标记时间已过 → 立即返回。
-## 播放中途被 stop() → 返回,不会永远挂着。
+## 播放中途被 [method stop] 或播放结束 → 返回,不会永远挂着。
+##
+## [b]可以在 play() 之前就 await[/b],也可以在暂停期间 await ——
+## 判据是"这一轮播放有没有作废",不是"此刻是否正在播"。
 func at(marker_name: StringName) -> void:
 	var m := _require(marker_name)
 	if m == null:
 		return
 	if time() >= m.time:
 		return
-	while _playing:
+	var gen := _generation
+	while _generation == gen:
 		var reached: StringName = await marker_reached
 		if reached == marker_name:
 			return
-	# 走到这里说明播放已经停了。
+	# 走到这里说明这一轮播放已经作废(stop() 或播放结束)。
 
 
 ## 等到标记之后再多等 [param delay] 秒。
@@ -341,5 +378,7 @@ func _finish() -> void:
 	_playing = false
 	_clock.stop()
 	set_process(false)
+	# 后面的标记不会再来了,放行所有还挂着的协程
+	_generation += 1
 	marker_reached.emit(&"")
 	finished.emit()

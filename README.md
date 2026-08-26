@@ -136,13 +136,19 @@ Cue.amplitude_level(thresholds, t := -1.0) -> int # 按阈值分档
 
 signal Cue.marker_reached(marker_name: StringName)
 signal Cue.finished()
+signal Cue.sheet_loaded(sheet: CueSheet)
 ```
 
 `at()` 的边界行为(都不会死锁):
 
 - 标记**不存在** → `push_error` 并立即返回
 - 标记时间**已过** → 立即返回
-- 播放中途 `stop()` → 所有还挂着的 `await` 被唤醒
+- 播放中途 `stop()` 或播放结束 → 所有还挂着的 `await` 被唤醒
+- **`play()` 之前就 `await` 也没问题**,暂停期间新起的 `await` 同样会老实等着 ——
+  判据是"这一轮播放有没有作废",不是"此刻是否正在播"
+- **`seek()` 不会打断挂着的 `await`**。拖播放头、跳到某个节拍都是正常操作,
+  不该让分镜脚本以为播放结束了。向前跳时,被跨过去的标记按"已经过去"处理
+  并逐个放行等待者(与"标记时间已过就返回"一致)
 
 ---
 
@@ -277,7 +283,7 @@ mouth.track = &"mouth"
 mouth.sprite = $Peter/Mouth                      # Sprite2D / TextureRect
 mouth.shape_textures = {&"A": tex_a, &"B": tex_b, ...}
 add_child(mouth)
-mouth.rebuild()                                   # load_sheet() 之后调
+# 不用手动 rebuild():它跟着 Cue.sheet_loaded 自动刷新
 
 # 方式二:读某个对白标记 payload 里的音素序列(时间相对该标记)
 mouth.source = CueMouthShape.Source.MARKER_PAYLOAD

@@ -87,13 +87,28 @@ func _ready() -> void:
 		push_error("Cue:CueMouthShape 找不到 Cue 自动加载(%s)。" % cue_path)
 		set_process(false)
 		return
-	# sheet 换了就重建
-	if _cue.has_signal("finished"):
-		rebuild()
+	# 换 sheet 时自动重建,不必调用方记得手动调
+	if _cue.has_signal("sheet_loaded") and not _cue.sheet_loaded.is_connected(_on_sheet_loaded):
+		_cue.sheet_loaded.connect(_on_sheet_loaded)
+	rebuild()
 	set_process(true)
 
 
-## 从当前 sheet 重新抓取口型序列。换了 sheet 之后要调一次。
+func _exit_tree() -> void:
+	if _cue != null and _cue.has_signal("sheet_loaded") \
+			and _cue.sheet_loaded.is_connected(_on_sheet_loaded):
+		_cue.sheet_loaded.disconnect(_on_sheet_loaded)
+
+
+func _on_sheet_loaded(_sheet: CueSheet) -> void:
+	rebuild()
+
+
+## 从当前 sheet 重新抓取口型序列。
+##
+## 换 sheet 时会由 [signal Cue.sheet_loaded] 自动触发,通常不用手动调 ——
+## 只有在运行中改了 [member track] / [member marker] / [member source]
+## 之外的东西(比如直接往 sheet 里塞标记)才需要。
 func rebuild() -> void:
 	_times = PackedFloat32Array()
 	_shapes = []

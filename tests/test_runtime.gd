@@ -42,6 +42,10 @@ func _run() -> void:
 	await _test_mouth_shape_amplitude()
 	await _test_multi_segment()
 	await _test_render_fps_calibration()
+	await _test_seek_during_await()
+	await _test_seek_forward_releases_skipped()
+	await _test_await_before_play_and_while_paused()
+	await _test_mouth_auto_rebuild()
 
 	print("\n=== %d 通过 / %d 失败 ===" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
@@ -72,7 +76,10 @@ func _sheet(times: Array, fps: int = 30) -> CueSheet:
 		if e.size() > 3:
 			m.payload = e[3]
 		s.add_marker(m)
-	# 没有音频时 duration() 靠 waveform,这里手搓一个只带时长的缓存
+	# 没有音频时 duration() 靠 waveform,这里手搓一个只带时长的缓存。
+	# audio_path 随手给一个 —— 否则 validate() 会为"片段既没 path 也没 stream"
+	# 报错刷屏,那是合理的告警,不该靠削弱校验来消音。
+	s.audio_path = "res://tests/probe/tone_1s.wav"
 	var w := WaveformCache.new()
 	w.mins = PackedFloat32Array([0.0]); w.maxs = PackedFloat32Array([0.0])
 	w.mix_rate = 44100; w.duration = 10.0
@@ -483,3 +490,153 @@ func _test_render_fps_calibration() -> void:
 	var elapsed := Engine.get_process_frames() - f0
 	near(c3.now(), float(elapsed) / 60.0, 1e-6,
 		"走了 %d 帧 → %.4fs(按 60fps 而不是 30fps)" % [elapsed, c3.now()])
+
+
+func _test_seek_during_await() -> void:
+	print("\n[Cue] 播放中 seek 不能把挂着的 at() 打断")
+	# 分镜脚本挂在 at() 上时,用户完全可能去拖播放头 / 跳到某个节拍。
+	# 如果 seek 把所有 await 唤醒并返回,整段脚本会在 seek 之后静默崩掉。
+	_cue.load_sheet(_sheet([[&"a", 0.20], [&"b", 0.60], [&"c", 1.00]]))
+
+	var order: Array[String] = []
+	var done: Array[bool] = [false]
+	var task := func() -> void:
+		await _cue.at(&"a"); order.append("a")
+		await _cue.at(&"b"); order.append("b")
+		await _cue.at(&"c"); order.append("c")
+		done[0] = true
+	task.call()
+
+	_cue.play(0.0)
+	# 等 a 触发
+	for i in 40:
+		await process_frame
+		if order.size() >= 1:
+			break
+	ok(order == ["a"], "a 已触发,协程正挂在 b 上:%s" % [order])
+
+	# 关键动作:此刻往回 seek。b、c 都还在未来,协程应当继续等
+	_cue.seek(0.30)
+	await _advance(3)
+	ok(order == ["a"], "seek 之后没有假触发:%s" % [order])
+	ok(_cue.is_playing(), "seek 之后仍在播放")
+
+	for i in 80:
+		await process_frame
+		if done[0]:
+			break
+	ok(done[0], "seek 之后 b、c 仍能正常触发")
+	ok(order == ["a", "b", "c"], "顺序完整:%s" % [order])
+	_cue.stop()
+
+
+func _test_seek_forward_releases_skipped() -> void:
+	print("\n[Cue] 向前 seek 跳过的标记要放行等待者")
+	_cue.load_sheet(_sheet([[&"p", 0.20], [&"q", 0.50], [&"r", 2.00]]))
+	var order: Array[String] = []
+	var done: Array[bool] = [false]
+	var task := func() -> void:
+		await _cue.at(&"p"); order.append("p")
+		await _cue.at(&"q"); order.append("q")
+		await _cue.at(&"r"); order.append("r")
+		done[0] = true
+	task.call()
+
+	_cue.play(0.0)
+	await _advance(2)
+	# p、q 都还没到就直接跳到 1.0 —— 它们已经"过去"了,
+	# 按 at() 的既有规则(标记时间已过 → 立即返回)应当放行
+	_cue.seek(1.0)
+	await _advance(4)
+	ok(order == ["p", "q"], "跳过的 p、q 被放行:%s" % [order])
+	ok(not done[0], "r 还在未来,仍然挂着")
+
+	for i in 80:
+		await process_frame
+		if done[0]:
+			break
+	ok(done[0], "r 到点后正常触发")
+	_cue.stop()
+
+
+func _test_await_before_play_and_while_paused() -> void:
+	print("\n[Cue] play() 之前 / 暂停期间 await 都不能立即返回")
+	# 这两种情况下 _playing 都是 false。曾经拿它当 at() 的循环条件,
+	# 于是「先起协程再 play()」会让整段分镜在一帧里跑完。
+	_cue.load_sheet(_sheet([[&"one", 0.30], [&"two", 0.80]]))
+
+	var order: Array[String] = []
+	var task := func() -> void:
+		await _cue.at(&"one"); order.append("one")
+		await _cue.at(&"two"); order.append("two")
+	task.call()                      # 注意:play() 还没调
+	ok(order.is_empty(), "play() 之前起的协程仍在等待:%s" % [order])
+
+	_cue.play(0.0)
+	for i in 40:
+		await process_frame
+		if order.size() >= 1:
+			break
+	ok(order == ["one"], "第一个标记正常触发:%s" % [order])
+
+	# 暂停期间新起一个 await,同样不能立刻返回
+	_cue.pause()
+	var late: Array[String] = []
+	var late_task := func() -> void:
+		await _cue.at(&"two"); late.append("two")
+	late_task.call()
+	await _advance(3)
+	ok(late.is_empty(), "暂停期间起的 await 仍在等待:%s" % [late])
+	ok(order == ["one"], "暂停期间原协程也没有被误唤醒")
+
+	_cue.resume()
+	for i in 60:
+		await process_frame
+		if late.size() >= 1:
+			break
+	ok(late == ["two"], "恢复播放后触发:%s" % [late])
+	ok(order == ["one", "two"], "原协程也走完:%s" % [order])
+	_cue.stop()
+
+	# stop() 仍然必须放行,否则协程永远挂着
+	_cue.load_sheet(_sheet([[&"far", 9.0]]))
+	var freed: Array[bool] = [false]
+	var t2 := func() -> void:
+		await _cue.at(&"far")
+		freed[0] = true
+	t2.call()
+	_cue.play(0.0)
+	await _advance(2)
+	ok(not freed[0], "标记还远,挂着")
+	_cue.stop()
+	await _advance(2)
+	ok(freed[0], "stop() 之后放行")
+
+
+func _test_mouth_auto_rebuild() -> void:
+	print("\n[CueMouthShape] 换 sheet 自动重建")
+	_cue.load_sheet(_mouth_sheet())
+	var mouth := CueMouthShape.new()
+	mouth.cue_path = _cue.get_path()
+	mouth.track = &"mouth"
+	root.add_child(mouth)
+	await process_frame
+	eq(mouth.entry_count(), 5, "初始抓到 5 条")
+
+	# 换一个口型条数不同的 sheet —— 不手动 rebuild()
+	var other := _sheet([
+		[&"x1", 0.1, &"mouth", {"shape": "B"}],
+		[&"x2", 0.2, &"mouth", {"shape": "C"}],
+	])
+	_cue.load_sheet(other)
+	await process_frame
+	eq(mouth.entry_count(), 2, "换 sheet 后自动重建成 2 条(没有手动调 rebuild)")
+	eq(String(mouth.shape_at(0.15)), "B", "新数据生效")
+
+	# 节点移除后不该再被信号牵连
+	mouth.queue_free()
+	await process_frame
+	await process_frame
+	_cue.load_sheet(_mouth_sheet())
+	await process_frame
+	ok(true, "节点释放后再换 sheet 不报错(信号已断开)")

@@ -61,9 +61,7 @@ func _ready() -> void:
 	add_child(_amp_mouth)
 
 	Cue.play()
-	# rebuild() 要在 load_sheet() 之后调 —— 它是从当前 sheet 抓数据的
-	_mouth.rebuild()
-	_amp_mouth.rebuild()
+	# 不用手动 rebuild():CueMouthShape 会跟着 Cue.sheet_loaded 自己刷新
 	_report()
 
 	# 离线渲染时按[b]固定帧号[/b]收尾,不用 Cue.finished 信号 ——
