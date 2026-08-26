@@ -98,7 +98,7 @@ Rhubarb JSON → 导入器 → `mouth` 轨 → `CueMouthShape` → `Sprite2D`。
 | 点轨道头的箭头 / 双击轨道头 | 折叠 / 展开该轨 |
 | 点轨道头的名字 | 设为「加标记」的目标轨 |
 | 工具栏的折叠 / 展开按钮 | 一次性折叠或展开所有轨 |
-| 工具栏「生成剧本」 | 把展开轨道的标记导出成 GDScript 骨架 |
+| 工具栏「导出」菜单 | 标记 JSON/CSV、包络 JSON/CSV、剧本骨架 |
 
 标记只能在**自己的泳道里**点选,波形区里点击一律是移动播放头 ——
 这样口型轨那种密集标记不会和定位操作互相抢点击。
@@ -311,6 +311,41 @@ sheet.envelope.export_csv("res://out/env.csv")     # time,amplitude
 
 ---
 
+## 标记导出:CSV / JSON
+
+工具栏的**导出**菜单可以把标记写成两种格式:
+
+**JSON 是无损的**,而且可以再导回来 —— 所以它同时也是"用外部脚本生成标记"
+的入口(Python 算好时间戳、写成这个格式、从导入菜单读进来)。
+
+```json
+{
+  "cue_format": 1,
+  "fps": 30,
+  "duration": 3.40,
+  "segments": [{"name": "Peter", "path": "res://vo/peter.wav", "offset": 0.0, "length": 1.6}],
+  "tracks":   [{"name": "dialogue", "color": "66b3ff"}],
+  "markers":  [{"name": "peter_line_1", "time": 0.15, "track": "peter", "payload": {}}]
+}
+```
+
+**CSV 是给人看的** —— 丢进表格排序、筛选、和字幕稿对照:
+
+```
+name,time,frame,track,text,shape,payload
+line_1,0.500000,15,dialogue,"你好,世界",,"{""text"":""你好,世界""}"
+```
+
+`text` / `shape` 是从 payload 里抽出来的便利列,完整数据仍在 `payload` 列,
+所以 CSV 也是无损的。便利列里的换行会压平成字面的 `
+` ——
+RFC 4180 允许带引号的字段里有真换行,但那样"一行一条记录"就不成立了,
+任何按行切分的脚本都会被撑爆。
+
+导入菜单会自动分辨 `.json` 是 Cue 自己导出的还是 Rhubarb 的(看顶层有没有 `cue_format`)。
+
+---
+
 ## 从标记生成剧本骨架
 
 标记打完之后,工具栏点「生成剧本」,直接得到一串 `await`:
@@ -399,6 +434,7 @@ addons/cue/
 │   ├── pcm_reader.gd               # RIFF 解析 + 格式校验
 │   ├── waveform_builder.gd         # 分块峰值计算
 │   ├── cue_envelope.gd             # 振幅包络 + JSON/CSV 导出
+│   ├── marker_export.gd            # 标记 JSON/CSV 导出与回读
 │   ├── envelope_builder.gd         # 从峰值缓存推包络
 │   └── script_generator.gd         # 标记 → GDScript 骨架
 ├── editor/                         # 只在编辑器里跑
@@ -452,7 +488,7 @@ tests/determinism.sh             # 只跑双次渲染哈希比对
 | `tests/test_import.gd` | Rhubarb / TextGrid 解析 | 50 |
 | `tests/test_segments.gd` | 多音频片段:几何、兼容升级、重叠与空隙 | 54 |
 | `tests/test_lanes.gd` | 轨道泳道几何、折叠、命中测试 | 32 |
-| `tests/test_export.gd` | 振幅包络、剧本生成(含生成代码真编译一遍) | 63 |
+| `tests/test_export.gd` | 振幅包络、剧本生成(含真编译一遍)、标记导出往返 | 96 |
 | `tests/edit_harness/` | undo/redo、持久化、导入、泳道、包络、剧本、片段升级(需编辑器) | 102 |
 | `tests/toggle_harness/` | 插件反复启停无泄漏(需编辑器) | 10 轮 |
 | `tests/determinism.sh` | 三个场景双次渲染逐帧 SHA256 | 91 + 121 + 103 帧 |

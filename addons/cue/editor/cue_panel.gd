@@ -22,6 +22,7 @@ var _renaming: CueMarker = null
 var _open_dialog: EditorFileDialog = null
 var _import_dialog: EditorFileDialog = null
 var _script_dialog: EditorFileDialog = null
+var _export_kind: int = -1
 var _dirty: bool = false
 var _analyzing: bool = false
 
@@ -97,7 +98,7 @@ func _ready() -> void:
 	_transport.analyze_requested.connect(analyze_waveform)
 	_transport.import_requested.connect(_import_dialog_show)
 	_transport.collapse_all_requested.connect(func(v: bool) -> void: state.set_all_collapsed(v))
-	_transport.generate_script_requested.connect(_script_dialog_show)
+	_transport.export_requested.connect(_export_requested)
 	_transport.add_marker_requested.connect(func() -> void: _add_marker(state.maybe_snap(state.playhead)))
 	_transport.zoom_in_requested.connect(func() -> void: state.zoom_at(1.4, size.x * 0.5))
 	_transport.zoom_out_requested.connect(func() -> void: state.zoom_at(1.0 / 1.4, size.x * 0.5))
@@ -424,7 +425,7 @@ func _import_dialog_show() -> void:
 		_import_dialog = EditorFileDialog.new()
 		_import_dialog.file_mode = EditorFileDialog.FILE_MODE_OPEN_FILE
 		_import_dialog.access = EditorFileDialog.ACCESS_FILESYSTEM
-		_import_dialog.add_filter("*.json", "Rhubarb Lip Sync JSON")
+		_import_dialog.add_filter("*.json", "Rhubarb JSON / Cue 导出的标记 JSON")
 		_import_dialog.add_filter("*.TextGrid,*.textgrid", "Praat / MFA TextGrid")
 		_import_dialog.title = "导入口型 / 对齐数据"
 		_import_dialog.file_selected.connect(import_file)
@@ -440,7 +441,9 @@ func import_file(path: String) -> void:
 		return
 	var res: CueImportResult
 	if path.get_extension().to_lower() == "json":
-		res = CueRhubarbImporter.parse(path)
+		# Cue 自己导出的标记 JSON 和 Rhubarb 的都是 .json,
+		# 靠顶层字段区分:有 cue_format 就是自己人。
+		res = _sniff_json(path)
 	else:
 		res = CueTextGridImporter.parse(path)
 	if not res.ok():
@@ -475,6 +478,15 @@ func import_file(path: String) -> void:
 	print("Cue:", res.summary())
 
 
+## 分辨 .json 是 Cue 自己导出的还是 Rhubarb 的。
+func _sniff_json(path: String) -> CueImportResult:
+	if FileAccess.file_exists(path):
+		var head := FileAccess.get_file_as_string(path).substr(0, 400)
+		if head.contains("\"cue_format\""):
+			return CueMarkerExport.from_json(path)
+	return CueRhubarbImporter.parse(path)
+
+
 ## 导入带进来的新轨道要有个颜色,否则全挤在默认色上分不清。
 func _ensure_tracks(names: PackedStringArray) -> void:
 	var sheet := state.sheet
@@ -495,21 +507,77 @@ func _ensure_tracks(names: PackedStringArray) -> void:
 
 # ── 生成剧本骨架 ────────────────────────────────────────────────────
 
-func _script_dialog_show() -> void:
+## 五种导出共用一个保存对话框,靠 _export_kind 记住这次要写什么。
+func _export_requested(kind: int) -> void:
 	if state.sheet == null:
-		push_error("Cue:先打开一个 CueSheet 再生成剧本。")
+		push_error("Cue:先打开一个 CueSheet 再导出。")
 		return
+	if kind in [CueTransport.Export.ENVELOPE_JSON, CueTransport.Export.ENVELOPE_CSV] \
+			and (state.sheet.envelope == null or not state.sheet.envelope.is_valid()):
+		push_error("Cue:这个 CueSheet 还没有振幅包络。请先点「分析波形」。")
+		return
+
+	_export_kind = kind
 	if _script_dialog == null:
 		_script_dialog = EditorFileDialog.new()
 		_script_dialog.file_mode = EditorFileDialog.FILE_MODE_SAVE_FILE
 		_script_dialog.access = EditorFileDialog.ACCESS_RESOURCES
-		_script_dialog.add_filter("*.gd", "GDScript")
-		_script_dialog.title = "生成剧本骨架"
-		_script_dialog.file_selected.connect(generate_script)
+		_script_dialog.file_selected.connect(_do_export)
 		add_child(_script_dialog)
+
 	var base := state.sheet.resource_path.get_basename()
-	_script_dialog.current_path = (base if base != "" else "res://shot") + "_shot.gd"
+	if base == "":
+		base = "res://cue"
+	_script_dialog.clear_filters()
+	match kind:
+		CueTransport.Export.MARKERS_JSON:
+			_script_dialog.title = "导出标记(JSON)"
+			_script_dialog.add_filter("*.json", "JSON")
+			_script_dialog.current_path = base + "_markers.json"
+		CueTransport.Export.MARKERS_CSV:
+			_script_dialog.title = "导出标记(CSV)"
+			_script_dialog.add_filter("*.csv", "CSV")
+			_script_dialog.current_path = base + "_markers.csv"
+		CueTransport.Export.ENVELOPE_JSON:
+			_script_dialog.title = "导出振幅包络(JSON)"
+			_script_dialog.add_filter("*.json", "JSON")
+			_script_dialog.current_path = base + "_envelope.json"
+		CueTransport.Export.ENVELOPE_CSV:
+			_script_dialog.title = "导出振幅包络(CSV)"
+			_script_dialog.add_filter("*.csv", "CSV")
+			_script_dialog.current_path = base + "_envelope.csv"
+		CueTransport.Export.SCRIPT:
+			_script_dialog.title = "生成剧本骨架"
+			_script_dialog.add_filter("*.gd", "GDScript")
+			_script_dialog.current_path = base + "_shot.gd"
 	_script_dialog.popup_centered_ratio(0.6)
+
+
+func _do_export(path: String) -> void:
+	var sheet := state.sheet
+	if sheet == null:
+		return
+	var err := OK
+	match _export_kind:
+		CueTransport.Export.MARKERS_JSON:
+			err = CueMarkerExport.save_json(sheet, path)
+		CueTransport.Export.MARKERS_CSV:
+			err = CueMarkerExport.save_csv(sheet, path)
+		CueTransport.Export.ENVELOPE_JSON:
+			err = sheet.envelope.export_json(path)
+		CueTransport.Export.ENVELOPE_CSV:
+			err = sheet.envelope.export_csv(path)
+		CueTransport.Export.SCRIPT:
+			generate_script(path)
+			return
+		_:
+			return
+	if err != OK:
+		push_error("Cue:写入 %s 失败(错误码 %d)。" % [path, err])
+		return
+	if path.begins_with("res://"):
+		EditorInterface.get_resource_filesystem().update_file(path)
+	print("Cue:已导出 → %s" % path)
 
 
 ## 只生成当前展开的轨道 —— 折叠一条轨等于"这条我现在不关心",

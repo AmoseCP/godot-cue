@@ -16,6 +16,8 @@ func _init() -> void:
 	_test_generate_basic()
 	_test_generate_filter_and_escape()
 	_test_generated_script_compiles()
+	_test_marker_json_roundtrip()
+	_test_marker_csv()
 	print("\n=== %d 通过 / %d 失败 ===" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -253,3 +255,115 @@ func _tricky_sheet() -> CueSheet:
 	s.add_marker(CueMarker.new(&"back\\slash", 0.3))
 	s.add_marker(CueMarker.new(&"tab\there", 0.4))
 	return s
+
+
+# ── 标记导出 ────────────────────────────────────────────────────────
+
+func _export_sheet() -> CueSheet:
+	var s := CueSheet.new()
+	s.fps = 30
+	s.tracks = [CueTrack.new(&"dialogue", Color(1, 0, 0)),
+		CueTrack.new(&"mouth", Color(0, 1, 0))]
+	var seg := CueAudioSegment.new(&"Peter", "res://vo/peter.wav", 0.0)
+	var w := WaveformCache.new()
+	w.mins = PackedFloat32Array([-1.0]); w.maxs = PackedFloat32Array([1.0])
+	w.mix_rate = 44100; w.duration = 3.0
+	seg.waveform = w
+	s.segments = [seg] as Array[CueAudioSegment]
+
+	var m1 := CueMarker.new(&"line_1", 0.5, &"dialogue")
+	m1.payload = {"text": "你好,世界", "end": 1.2}
+	s.add_marker(m1)
+	var m2 := CueMarker.new(&"m_0000", 0.55, &"mouth")
+	m2.payload = {"shape": "B", "end": 0.7}
+	s.add_marker(m2)
+	# 名字和文本里带逗号、引号、换行 —— CSV 的经典雷区
+	var m3 := CueMarker.new(&"tricky,name", 1.8, &"dialogue")
+	m3.payload = {"text": "他说:\"走吧\",然后\n换行了"}
+	s.add_marker(m3)
+	return s
+
+
+func _test_marker_json_roundtrip() -> void:
+	print("\n[导出] 标记 JSON 往返")
+	var sheet := _export_sheet()
+	eq(CueMarkerExport.save_json(sheet, "user://mk.json"), OK, "写 JSON")
+
+	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string("user://mk.json"))
+	ok(parsed is Dictionary, "JSON 可解析")
+	var d := parsed as Dictionary
+	eq(int(d["cue_format"]), CueMarkerExport.FORMAT_VERSION, "带格式版本号")
+	eq(int(d["fps"]), 30, "fps")
+	near(float(d["duration"]), 3.0, 1e-4, "duration")
+	eq((d["markers"] as Array).size(), 3, "三个标记")
+	eq((d["tracks"] as Array).size(), 2, "两条轨道")
+	eq((d["segments"] as Array).size(), 1, "一个音频片段")
+	eq(((d["segments"] as Array)[0] as Dictionary)["name"], "Peter", "片段名")
+
+	# 无损回读
+	var back := CueMarkerExport.from_json("user://mk.json")
+	ok(back.ok(), "读回成功:%s" % back.error)
+	eq(back.markers.size(), 3, "回读三个标记")
+	eq(back.source_entries, 3, "条目数")
+	var by_name := {}
+	for m in back.markers:
+		by_name[String(m.name)] = m
+	ok(by_name.has("line_1"), "普通名字回来了")
+	ok(by_name.has("tricky,name"), "带逗号的名字回来了")
+	near(by_name["line_1"].time, 0.5, 1e-6, "时间无损")
+	eq(String(by_name["line_1"].track), "dialogue", "轨道无损")
+	eq(by_name["line_1"].payload["text"], "你好,世界", "中文 payload 无损")
+	eq(by_name["m_0000"].payload["shape"], "B", "口型 payload 无损")
+	eq(by_name["tricky,name"].payload["text"], "他说:\"走吧\",然后\n换行了",
+		"引号和换行都无损")
+
+	# 排序后导出 → 回读顺序一致
+	var order_out: Array[String] = []
+	for m in sheet.sorted():
+		order_out.append(String(m.name))
+	var order_in: Array[String] = []
+	for m in back.markers:
+		order_in.append(String(m.name))
+	ok(order_out == order_in, "导出顺序 = 排序顺序,回读保持:%s" % [order_in])
+
+	# 坏输入
+	var f := FileAccess.open("user://notcue.json", FileAccess.WRITE)
+	f.store_string('{"somethingElse": 1}')
+	f.close()
+	var bad := CueMarkerExport.from_json("user://notcue.json")
+	ok(not bad.ok() and bad.error.contains("markers"), "缺 markers 数组 → 中文错误")
+	ok(not CueMarkerExport.from_json("res://没有.json").ok(), "文件不存在 → 被拒绝")
+
+
+func _test_marker_csv() -> void:
+	print("\n[导出] 标记 CSV")
+	var sheet := _export_sheet()
+	eq(CueMarkerExport.save_csv(sheet, "user://mk.csv"), OK, "写 CSV")
+	var text := FileAccess.get_file_as_string("user://mk.csv")
+	var lines := text.split("\n", false)
+	eq(lines[0], CueMarkerExport.CSV_HEADER, "表头")
+	eq(lines.size(), 4, "表头 + 3 行 —— 便利列里的换行被压平,一行一条记录")
+	eq(text.count("\n"), 4, "整个文件只有 4 个裸换行(表头 + 3 条记录),没有把记录撑成两行的")
+
+	# 第一行是时间最早的 line_1
+	ok(lines[1].begins_with("line_1,0.500000,15,dialogue,"),
+		"名字/时间/帧号/轨道:%s" % lines[1])
+	ok(lines[1].contains("你好"), "text 便利列有内容")
+
+	# 带逗号的名字必须被引号包起来,否则列会错位
+	var tricky := ""
+	for L in lines:
+		if L.contains("tricky"):
+			tricky = L
+	ok(tricky.begins_with("\"tricky,name\","), "带逗号的名字被引号包住:%s" % tricky.substr(0, 40))
+	ok(tricky.contains("\"\""), "内部引号被翻倍转义")
+	# 多层转义容易写错,直接用 char(92) 拼一个反斜杠出来,意图更清楚
+	var bs := char(92)
+	ok(tricky.contains("然后" + bs + "n换行了"), "text 列里的换行压成了字面的 backslash-n")
+	# payload 列里两套转义叠在一起:JSON 先把引号写成 \" ,CSV 再把 " 翻倍,
+	# 于是最终是 反斜杠 + 两个引号。这个叠加关系正是最容易写错的地方。
+	ok(tricky.contains(bs + '""'), "payload 列:JSON 转义之上再叠一层 CSV 引号翻倍")
+
+	# 帧号 = round(time * fps)
+	ok(lines[2].contains(",17,") or lines[2].contains(",16,"),
+		"0.55s @30fps → f16/f17:%s" % lines[2])

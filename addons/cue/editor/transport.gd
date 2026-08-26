@@ -11,7 +11,7 @@ signal stop_requested()
 signal analyze_requested()
 signal import_requested()
 signal collapse_all_requested(collapsed: bool)
-signal generate_script_requested()
+signal export_requested(kind: int)
 signal zoom_in_requested()
 signal zoom_out_requested()
 signal zoom_fit_requested()
@@ -94,8 +94,7 @@ func _build() -> void:
 	var imp_btn := _button("导入", "AnimationTrackList", "导入 Rhubarb JSON 或 MFA TextGrid")
 	imp_btn.pressed.connect(func() -> void: import_requested.emit())
 
-	var gen_btn := _button("生成剧本", "Script", "把标记导出成一串 await Cue.at() 的 GDScript 骨架")
-	gen_btn.pressed.connect(func() -> void: generate_script_requested.emit())
+	_build_export_menu()
 
 	_progress = ProgressBar.new()
 	_progress.custom_minimum_size.x = 90.0
@@ -114,6 +113,32 @@ func _build() -> void:
 	zf.pressed.connect(func() -> void: zoom_fit_requested.emit())
 	var zi := _button("", "ZoomMore", "放大(滚轮上)")
 	zi.pressed.connect(func() -> void: zoom_in_requested.emit())
+
+
+## 导出动作都收在一个菜单里 —— 工具栏横向空间有限,
+## 五个动作各占一个按钮会把缩放控件挤出可视区。
+enum Export { MARKERS_JSON, MARKERS_CSV, ENVELOPE_JSON, ENVELOPE_CSV, SCRIPT }
+
+
+func _build_export_menu() -> void:
+	var mb := MenuButton.new()
+	mb.text = "导出"
+	mb.tooltip_text = "把标记 / 包络 / 剧本骨架写到文件"
+	mb.focus_mode = Control.FOCUS_NONE
+	if Engine.is_editor_hint():
+		var theme := EditorInterface.get_editor_theme()
+		if theme != null and theme.has_icon("Save", "EditorIcons"):
+			mb.icon = theme.get_icon("Save", "EditorIcons")
+	var pm := mb.get_popup()
+	pm.add_item("标记 → JSON(无损,可再导回)", Export.MARKERS_JSON)
+	pm.add_item("标记 → CSV(给人看 / 表格)", Export.MARKERS_CSV)
+	pm.add_separator()
+	pm.add_item("振幅包络 → JSON", Export.ENVELOPE_JSON)
+	pm.add_item("振幅包络 → CSV", Export.ENVELOPE_CSV)
+	pm.add_separator()
+	pm.add_item("剧本骨架 → .gd", Export.SCRIPT)
+	pm.id_pressed.connect(func(id: int) -> void: export_requested.emit(id))
+	add_child(mb)
 
 
 func _button(text: String, icon_name: String, tip: String) -> Button:
