@@ -186,6 +186,44 @@ tests/determinism.sh
 
 ---
 
+## 多角色分轨:一个 sheet,多段音频
+
+多角色配音通常是分开录的。一个 `CueSheet` 可以持有若干
+`CueAudioSegment`,每段一个 `.wav`、一个 `offset`、一份自己的波形缓存:
+
+```gdscript
+var peter := CueAudioSegment.new(&"Peter", "res://vo/peter.wav", 0.0)
+var john  := CueAudioSegment.new(&"John",  "res://vo/john.wav",  1.9)
+sheet.segments = [peter, john]
+```
+
+**关键在于标记时间轴是统一的** —— `await Cue.at(&"john_line_1")`
+不必关心那句话录在哪个文件里,也不必关心它在自己那段音频里的第几秒。
+分镜脚本只看一条时间轴。
+
+片段可以重叠(两人同时说话)也可以留空隙。运行时每段一个
+`AudioStreamPlayer`,到点自动起播;时钟锚点跟着"当前正在响的那一段"走,
+空隙里用挂钟续推(离线渲染始终走帧计数,不受影响)。
+
+每段持有**自己的**波形缓存,所以改一个角色的配音时,「分析波形」
+只重算那一段 —— 哈希没变的片段直接复用。
+
+```gdscript
+sheet.duration()          # 最靠后片段的结束时刻
+sheet.segment_at(t)       # 覆盖 t 的片段,空隙返回 null
+sheet.all_segments()      # 全部片段
+```
+
+> 这条推翻了原计划的锁定决策 D10(「一个 sheet 一个音频」)。
+> 旧的 `audio` / `audio_path` / `waveform` 字段仍然可用 ——
+> `all_segments()` 会用它们合成一个片段,点一次「分析波形」就地升级。
+
+可运行示例:`examples/multi_voice/main.tscn`
+
+![多角色分轨](docs/multi-voice-example.png)
+
+---
+
 ## 多轨与折叠
 
 每条轨道在波形上方占一条泳道,左边是轨道头(名字、颜色、标记数)。
@@ -353,7 +391,8 @@ macOS 上 `AudioServer.get_output_latency()` 实测返回 `0.0`
 addons/cue/
 ├── plugin.cfg / plugin.gd          # EditorPlugin 入口
 ├── core/                           # 编辑器与运行时共用的数据层
-│   ├── cue_sheet.gd                # 音频 + 标记 + 轨道
+│   ├── cue_sheet.gd                # 时间轴:片段 + 标记 + 轨道
+│   ├── cue_audio_segment.gd        # 一段音频 + 偏移 + 自己的波形缓存
 │   ├── cue_marker.gd               # name / time / track / payload
 │   ├── cue_track.gd                # 轨道元数据
 │   ├── waveform_cache.gd           # 预计算峰值 + 哈希失效检测
@@ -408,14 +447,15 @@ tests/determinism.sh             # 只跑双次渲染哈希比对
 
 | 套件 | 覆盖 | 断言数 |
 |---|---|---|
-| `tests/test_core.gd` | PCM 解码、峰值、缓存、排序、吸附、绘制性能 | 69 |
-| `tests/test_runtime.gd` | `Cue` / `CueClock` / `CueMouthShape`、`at()` 边界 | 58 |
+| `tests/test_core.gd` | PCM 解码、峰值、缓存、排序、吸附、绘制性能 | 70 |
+| `tests/test_runtime.gd` | `Cue` / `CueClock` / `CueMouthShape`、`at()` 边界、跨片段 | 65 |
 | `tests/test_import.gd` | Rhubarb / TextGrid 解析 | 50 |
+| `tests/test_segments.gd` | 多音频片段:几何、兼容升级、重叠与空隙 | 54 |
 | `tests/test_lanes.gd` | 轨道泳道几何、折叠、命中测试 | 32 |
 | `tests/test_export.gd` | 振幅包络、剧本生成(含生成代码真编译一遍) | 63 |
-| `tests/edit_harness/` | undo/redo、持久化、导入、泳道、包络、剧本(需编辑器) | 97 |
+| `tests/edit_harness/` | undo/redo、持久化、导入、泳道、包络、剧本、片段升级(需编辑器) | 102 |
 | `tests/toggle_harness/` | 插件反复启停无泄漏(需编辑器) | 10 轮 |
-| `tests/determinism.sh` | 两个场景双次渲染逐帧 SHA256 | 91 + 121 帧 |
+| `tests/determinism.sh` | 三个场景双次渲染逐帧 SHA256 | 91 + 121 + 103 帧 |
 
 UI 交互无法自动化,清单见 [`tests/MANUAL.md`](tests/MANUAL.md)。
 

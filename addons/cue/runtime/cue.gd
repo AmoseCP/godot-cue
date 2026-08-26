@@ -20,7 +20,10 @@ signal finished()
 
 var _sheet: CueSheet = null
 var _clock: CueClock = null
-var _player: AudioStreamPlayer = null
+## 每个音频片段一个播放器,下标与 [method CueSheet.all_segments] 对齐。
+var _players: Array[AudioStreamPlayer] = []
+var _segments: Array[CueAudioSegment] = []
+var _started: Array[bool] = []
 ## 按时间排好序的标记,配一个只前进的指针 —— 每帧开销与标记总数无关。
 var _queue: Array[CueMarker] = []
 var _next: int = 0
@@ -29,8 +32,32 @@ var _playing: bool = false
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
-	_ensure_player()
 	set_process(false)
+
+
+## 把每段音频摆到正确的播放位置:已经开始的从段内偏移处播,还没到的先不动。
+func _start_segments_at(t: float) -> void:
+	for i in _segments.size():
+		var seg := _segments[i]
+		var p := _players[i]
+		p.stop()
+		p.stream_paused = false
+		if seg.muted or seg.stream == null or t >= seg.end():
+			_started[i] = t >= seg.end()
+			continue
+		if seg.covers(t):
+			p.play(seg.local_time(t))
+			_started[i] = true
+		else:
+			_started[i] = false        # 还没轮到,等 _process 推到再起播
+
+
+## 当前时刻该拿哪个播放器当时间锚点。没有片段覆盖(空隙)时返回 -1。
+func _anchor_index(t: float) -> int:
+	for i in _segments.size():
+		if _segments[i].covers(t) and _players[i].playing:
+			return i
+	return -1
 
 
 func _exit_tree() -> void:
@@ -40,23 +67,37 @@ func _exit_tree() -> void:
 	# "1 resources still in use at exit" —— 那是引擎自身的关闭顺序问题,
 	# 用一个裸 AudioStreamPlayer 播放 AudioStreamWAV 再退出即可复现,
 	# 全程不涉及 Cue(见 NOTES.md M6)。这里做清理只是卫生习惯。
-	if _player != null:
-		_player.stop()
-		_player.stream = null
+	for p in _players:
+		if is_instance_valid(p):
+			p.stop()
+			p.stream = null
+	_players.clear()
+	_segments.clear()
 	_sheet = null
 	_queue.clear()
 
 
+## 按片段重建播放器,一段一个。
+##
 ## 自动加载之间的 _ready 顺序是按注册顺序来的,别的自动加载完全可能在
-## Cue._ready() 之前就调 load_sheet()。所以播放器要能被随时按需创建,
-## 不能只在 _ready 里建 —— 否则那种情况下 _player 是 null,直接崩。
-func _ensure_player() -> void:
-	if _player != null:
-		return
-	_player = AudioStreamPlayer.new()
-	_player.name = "CuePlayer"
-	add_child(_player)
-	_player.finished.connect(_on_stream_finished)
+## Cue._ready() 之前就调 load_sheet(),所以这里不能依赖 _ready 已经跑过。
+func _rebuild_players() -> void:
+	for p in _players:
+		if is_instance_valid(p):
+			p.stop()
+			p.queue_free()
+	_players.clear()
+	_started.clear()
+	_segments = _sheet.all_segments() if _sheet != null else ([] as Array[CueAudioSegment])
+	for i in _segments.size():
+		var seg := _segments[i]
+		var p := AudioStreamPlayer.new()
+		p.name = "CuePlayer%d" % i
+		p.stream = seg.stream
+		p.volume_db = seg.gain_db
+		add_child(p)
+		_players.append(p)
+		_started.append(false)
 
 
 func load_sheet(sheet: CueSheet) -> void:
@@ -67,11 +108,10 @@ func load_sheet(sheet: CueSheet) -> void:
 	if not issues.is_empty():
 		for i in issues:
 			push_error("Cue:sheet 数据有问题 —— %s" % i)
-	_ensure_player()
 	stop()
 	_sheet = sheet
-	_player.stream = sheet.audio
-	_clock = CueClock.new(float(sheet.fps), _player)
+	_rebuild_players()
+	_clock = CueClock.new(float(sheet.fps), null)
 	_queue = sheet.sorted()
 	_next = 0
 
@@ -92,12 +132,10 @@ func play(from: float = 0.0) -> void:
 	if _sheet == null:
 		push_error("Cue:还没有 load_sheet(),play() 无效。")
 		return
-	_ensure_player()
 	_seek_queue(from)
 	_playing = true
-	if _player.stream != null:
-		_player.play(from)
 	_clock.start(from)
+	_start_segments_at(from)
 	set_process(true)
 
 
@@ -105,7 +143,8 @@ func pause() -> void:
 	if not _playing:
 		return
 	_playing = false
-	_player.stream_paused = true
+	for p in _players:
+		p.stream_paused = true
 	_clock.stop()
 	set_process(false)
 
@@ -114,7 +153,8 @@ func resume() -> void:
 	if _playing or _sheet == null:
 		return
 	_playing = true
-	_player.stream_paused = false
+	for p in _players:
+		p.stream_paused = false
 	_clock.resume()
 	set_process(true)
 
@@ -122,10 +162,14 @@ func resume() -> void:
 func stop() -> void:
 	var was := _playing
 	_playing = false
-	if _player != null:
-		_player.stop()
-		_player.stream_paused = false
+	for p in _players:
+		if is_instance_valid(p):
+			p.stop()
+			p.stream_paused = false
+	for i in _started.size():
+		_started[i] = false
 	if _clock != null:
+		_clock.player = null
 		_clock.stop()
 	set_process(false)
 	if was:
@@ -257,6 +301,26 @@ func _process(_delta: float) -> void:
 	if not _playing:
 		return
 	var t := time()
+
+	# 时间到了就把还没起播的片段拉起来
+	for i in _segments.size():
+		if _started[i]:
+			continue
+		var seg := _segments[i]
+		if seg.muted or seg.stream == null:
+			continue
+		if t >= seg.offset and t < seg.end():
+			_players[i].play(seg.local_time(t))
+			_started[i] = true
+
+	# 时钟锚点跟着"当前正在响的那一段"走
+	var ai := _anchor_index(t)
+	if ai >= 0:
+		_clock.player = _players[ai]
+		_clock.anchor_offset = _segments[ai].offset
+	else:
+		_clock.player = null
+
 	# 一帧内可能跨过多个标记(低帧率或密集口型轨),必须全部补发,
 	# 且顺序与排序一致 —— 这是离线渲染可复现的前提。
 	while _next < _queue.size() and _queue[_next].time <= t:
@@ -267,13 +331,6 @@ func _process(_delta: float) -> void:
 		var dur := _sheet.duration()
 		if dur > 0.0 and t >= dur:
 			_finish()
-
-
-func _on_stream_finished() -> void:
-	# 离线渲染时音频流的 finished 与帧时钟无关,一律以帧时钟为准。
-	if _clock != null and _clock.is_movie_mode():
-		return
-	_finish()
 
 
 func _finish() -> void:

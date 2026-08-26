@@ -180,37 +180,89 @@ func _mark_dirty() -> void:
 
 # ── 波形分析 ────────────────────────────────────────────────────────
 
-func analyze_waveform() -> void:
+## 分析全部片段。只重算[b]需要[/b]重算的那些 —— 改一个角色的配音时
+## 不该把整集其他角色的波形也重扫一遍(这是 D10′ 保留"局部重渲"诉求的落点)。
+func analyze_waveform(force: bool = false) -> void:
 	var sheet := state.sheet
 	if sheet == null or _analyzing:
 		return
-	var path := sheet.audio_path
-	if path == "" and sheet.audio != null:
-		path = sheet.audio.resource_path
-	var src := CuePcmReader.open(path, sheet.audio)
-	if not src.ok():
-		push_error(src.error)
+
+	# 旧的单音频 sheet 在这里就地升级成 segments 形式
+	sheet.migrate_legacy()
+
+	var segs := sheet.all_segments()
+	if segs.is_empty():
+		push_error("Cue:这个 CueSheet 还没有音频片段。请在 Inspector 里往 segments 加一段。")
 		return
 
 	_analyzing = true
 	var builder := CueWaveformBuilder.new()
-	builder.progress.connect(func(r: float) -> void: _transport.show_progress(r))
-	var cache: WaveformCache = await builder.build_async(src)
-	cache.source_hash = WaveformCache.compute_hash(path)
+	var done := 0
+	var failed := PackedStringArray()
+
+	for seg in segs:
+		if not force and seg.has_waveform() and not seg.waveform_stale():
+			done += 1
+			_transport.show_progress(float(done) / float(segs.size()))
+			continue
+		var src := CuePcmReader.open(seg.path, seg.stream)
+		if not src.ok():
+			failed.append(src.error)
+			done += 1
+			continue
+		# 多段时进度条要横跨所有段,不能每段都从 0 走一遍
+		var base := float(done) / float(segs.size())
+		var span := 1.0 / float(segs.size())
+		var cb := func(r: float) -> void: _transport.show_progress(base + r * span)
+		builder.progress.connect(cb)
+		var cache: WaveformCache = await builder.build_async(src)
+		builder.progress.disconnect(cb)
+		cache.source_hash = WaveformCache.compute_hash(seg.path)
+		if state.sheet != sheet:
+			_analyzing = false        # 分析期间用户换了 sheet
+			return
+		seg.waveform = cache
+		done += 1
+
 	_analyzing = false
 	_transport.show_progress(1.0)
+	for e in failed:
+		push_error(e)
 
-	if state.sheet != sheet:
-		return                        # 分析期间用户换了 sheet
-	sheet.waveform = cache
-	# 包络是从峰值缓存推出来的,瞬时完成,所以不给它单独的按钮 ——
-	# 分析一次就两样都有了。
-	var env := CueEnvelopeBuilder.normalized(CueEnvelopeBuilder.from_cache(cache))
-	env.source_hash = cache.source_hash
-	sheet.envelope = env
+	# 包络跨全部片段,从各段的峰值缓存拼出来
+	sheet.envelope = _build_envelope(sheet)
 	_mark_dirty()
 	state.notify_sheet_edited()
 	state.zoom_fit()
+
+
+## 把各片段的峰值缓存按 offset 拼成一条覆盖整条时间轴的包络。
+func _build_envelope(sheet: CueSheet) -> CueEnvelope:
+	var segs := sheet.all_segments()
+	var dur := sheet.duration()
+	if segs.is_empty() or dur <= 0.0:
+		return null
+	var rate := CueEnvelopeBuilder.DEFAULT_RATE
+	var out := CueEnvelope.new()
+	out.rate = rate
+	out.duration = dur
+	var vals := PackedFloat32Array()
+	vals.resize(maxi(int(ceil(dur * rate)), 1))
+	for seg in segs:
+		if not seg.has_waveform():
+			continue
+		var part := CueEnvelopeBuilder.from_cache(seg.waveform, rate)
+		var base := int(round(seg.offset * rate))
+		for i in part.values.size():
+			var j := base + i
+			if j < 0 or j >= vals.size():
+				continue
+			# 片段重叠时取较大者,而不是相加 —— 相加会让重叠处虚高
+			vals[j] = maxf(vals[j], part.values[i])
+	out.values = vals
+	if segs.size() > 0 and segs[0].waveform != null:
+		out.source_hash = segs[0].waveform.source_hash
+	return CueEnvelopeBuilder.normalized(out)
 
 
 # ── 播放 ────────────────────────────────────────────────────────────

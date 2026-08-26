@@ -40,6 +40,7 @@ func _run() -> void:
 	await _test_mouth_shape()
 	await _test_mouth_shape_payload()
 	await _test_mouth_shape_amplitude()
+	await _test_multi_segment()
 
 	print("\n=== %d 通过 / %d 失败 ===" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
@@ -394,3 +395,58 @@ func _test_mouth_shape_amplitude() -> void:
 	eq(String(m2.shape_at(0.5)), "X", "没有包络时退回静止嘴型,不崩溃")
 	mouth.queue_free()
 	m2.queue_free()
+
+
+func _test_multi_segment() -> void:
+	print("\n[Cue] 多音频片段:标记跨片段统一触发")
+	var sheet := CueSheet.new()
+	sheet.fps = 30
+	var a := CueAudioSegment.new(&"peter", "", 0.0)
+	var wa := WaveformCache.new()
+	wa.mins = PackedFloat32Array([-0.5]); wa.maxs = PackedFloat32Array([0.5])
+	wa.mix_rate = 44100; wa.duration = 1.0
+	a.waveform = wa
+	var b := CueAudioSegment.new(&"john", "", 2.0)
+	var wb := WaveformCache.new()
+	wb.mins = PackedFloat32Array([-0.5]); wb.maxs = PackedFloat32Array([0.5])
+	wb.mix_rate = 44100; wb.duration = 1.0
+	b.waveform = wb
+	sheet.segments = [a, b] as Array[CueAudioSegment]
+	# 三个标记:第一段里、空隙里、第二段里
+	sheet.add_marker(CueMarker.new(&"in_a", 0.4))
+	sheet.add_marker(CueMarker.new(&"in_gap", 1.5))
+	sheet.add_marker(CueMarker.new(&"in_b", 2.4))
+
+	near(sheet.duration(), 3.0, 1e-6, "总时长跨两段")
+	_cue.load_sheet(sheet)
+
+	var order: Array[String] = []
+	var done: Array[bool] = [false]
+	var task := func() -> void:
+		await _cue.at(&"in_a"); order.append("a")
+		await _cue.at(&"in_gap"); order.append("gap")
+		await _cue.at(&"in_b"); order.append("b")
+		done[0] = true
+	task.call()
+
+	_cue.play(0.0)
+	for i in 120:
+		await process_frame
+		if done[0]:
+			break
+	ok(done[0], "三个标记全部触发")
+	ok(order == ["a", "gap", "b"], "跨片段顺序正确:%s" % [order])
+
+	# window() 也跨片段
+	var w: Dictionary = _cue.window(&"in_gap")
+	near(float(w["start"]), 1.5, 1e-6, "空隙里的标记 window.start")
+	near(float(w["end"]), 2.4, 1e-6, "window.end 是下一个标记,与片段边界无关")
+	var wl: Dictionary = _cue.window(&"in_b")
+	near(float(wl["end"]), 3.0, 1e-6, "最后一个标记 window.end = 整条时间轴总长")
+	_cue.stop()
+
+	# 从第二段中间起播
+	_cue.play(2.2)
+	await _advance(2)
+	ok(_cue.time() >= 2.2, "从第二段中间起播,时间正确(%.3f)" % _cue.time())
+	_cue.stop()

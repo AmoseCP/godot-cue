@@ -290,7 +290,9 @@ func _test_redraw_perf() -> void:
 	print("\n[性能] M1 门槛:缩放全程 ≥ 50fps(每帧线段重建 ≤ 20ms)")
 	var src := CuePcmReader.read_wav_file(WAV_5MIN)
 	var sheet := CueSheet.new()
-	sheet.waveform = CueWaveformBuilder.new().build(src, 256)
+	var seg := CueAudioSegment.new(&"voice", WAV_5MIN, 0.0)
+	seg.waveform = CueWaveformBuilder.new().build(src, 256)
+	sheet.segments = [seg] as Array[CueAudioSegment]
 
 	var state := CueViewState.new()
 	state.sheet = sheet
@@ -308,11 +310,23 @@ func _test_redraw_perf() -> void:
 		state.px_per_sec = 1920.0 / vis
 		state.scroll_sec = 100.0
 		var t0 := Time.get_ticks_msec()
-		view.call("_rebuild_lines", sheet.waveform)
+		view.call("_rebuild_lines")
 		var dt := Time.get_ticks_msec() - t0
 		if dt > worst:
 			worst = dt
 			worst_at = vis
 	print("        最慢一帧 %dms(在 %.2f 秒/屏)" % [worst, worst_at])
 	ok(worst <= 20, "最慢 %dms ≤ 20ms(≥50fps)" % worst)
+
+	# 多段时线段拼进同一个数组,一次 draw_multiline 画完
+	var seg2 := CueAudioSegment.new(&"voice_b", WAV_5MIN, 120.0)
+	seg2.waveform = seg.waveform
+	sheet.segments = [seg, seg2] as Array[CueAudioSegment]
+	state.px_per_sec = 1920.0 / 8.0
+	state.scroll_sec = 130.0
+	var t2 := Time.get_ticks_msec()
+	view.call("_rebuild_lines")
+	var dt2 := Time.get_ticks_msec() - t2
+	print("        两段重叠时一帧 %dms" % dt2)
+	ok(dt2 <= 20, "两段时最慢 %dms ≤ 20ms" % dt2)
 	view.free()

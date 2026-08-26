@@ -9,12 +9,13 @@
 # 两个场景都测:
 #   tests/determinism/main.tscn   —— 纯 Cue.at() / Cue.time()
 #   examples/mouth_sync/main.tscn —— 再加上 CueMouthShape 驱动贴图切换
+#   examples/multi_voice/main.tscn —— 多音频片段(D10′),多个播放器同时在跑
 
 set -uo pipefail
 
 GODOT="${1:-/Applications/Godot.app/Contents/MacOS/Godot}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SCENES=("tests/determinism/main.tscn" "examples/mouth_sync/main.tscn")
+SCENES=("tests/determinism/main.tscn" "examples/mouth_sync/main.tscn" "examples/multi_voice/main.tscn")
 
 if [ ! -x "$GODOT" ]; then
 	echo "找不到 Godot 可执行文件:$GODOT" >&2

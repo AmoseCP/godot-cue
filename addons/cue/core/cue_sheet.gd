@@ -1,22 +1,36 @@
 @tool
 class_name CueSheet extends Resource
 
-## 一个音频文件 + 它上面的所有命名标记(见 PLAN D10:一个 sheet 对应一个音频)。
+## 一条统一的时间轴:若干段音频([CueAudioSegment])+ 它们上面的所有命名标记。
+##
+## 多角色配音通常分开录,每段带自己的 [member CueAudioSegment.offset]。
+## 标记时间轴跨全部片段,所以 [code]Cue.at()[/code] 不必关心那句话录在哪个文件里。
+## (原 PLAN D10「一个 sheet 一个音频」已于 2026-08-25 推翻为 D10′,见 NOTES.md。)
 ##
 ## 存为 .tres 文本资源,可以 git diff、可以外部脚本生成、可以手工修补(PLAN D5)。
 
-## 导入后的音频资源,运行时播放用。
+## 音频片段,按 offset 排列。这是权威存储。
+@export var segments: Array[CueAudioSegment] = []:
+	set(v):
+		segments = v
+		_seg_cache.clear()
+		emit_changed()
+
+## 兼容字段(D10 时代的单音频模型)。[member segments] 为空时,
+## [method all_segments] 会用这三个字段合成一个片段返回,所以旧 .tres 不改也能用。
+## 点一次「分析波形」会把它们就地升级进 segments。
 @export var audio: AudioStream = null:
 	set(v):
 		audio = v
 		if audio != null and audio_path == "":
 			audio_path = audio.resource_path
+		_seg_cache.clear()
 		emit_changed()
 
-## 源 WAV 的 res:// 路径。波形分析优先读它,以绕过导入压缩。
 @export_file("*.wav") var audio_path: String = "":
 	set(v):
 		audio_path = v
+		_seg_cache.clear()
 		emit_changed()
 
 @export var markers: Array[CueMarker] = []:
@@ -30,7 +44,11 @@ class_name CueSheet extends Resource
 		tracks = v
 		emit_changed()
 
-@export var waveform: WaveformCache = null
+## 兼容字段,同上。新数据放在 [member CueAudioSegment.waveform] 里。
+@export var waveform: WaveformCache = null:
+	set(v):
+		waveform = v
+		_seg_cache.clear()
 
 ## 振幅包络。没有口型数据时的降级方案(见 [CueEnvelope])。
 ## 和波形缓存一起在「分析波形」时生成。
@@ -44,6 +62,8 @@ class_name CueSheet extends Resource
 
 var _sorted: Array[CueMarker] = []
 var _dirty: bool = true
+## 旧字段合成出来的临时片段,避免每次调用都新建一个。
+var _seg_cache: Array[CueAudioSegment] = []
 
 ## 被 [method remove_marker] 摘下来的标记暂存在这里,免得没人引用就被释放 ——
 ## undo 栈里还指着它。不是 @export,不会写进 .tres。
@@ -97,6 +117,7 @@ func invalidate() -> void:
 ## 所以面板改成监听本信号来刷新,而不是把自己挂进 undo 栈。
 func touch() -> void:
 	_dirty = true
+	_seg_cache.clear()
 	emit_changed()
 
 
@@ -150,12 +171,59 @@ func index_of(m: CueMarker) -> int:
 	return markers.find(m)
 
 
+## 全部音频片段。[member segments] 为空时用兼容字段合成一个。
+func all_segments() -> Array[CueAudioSegment]:
+	if not segments.is_empty():
+		return segments
+	# 只有 waveform 没有音频也算数 —— 时长信息在缓存里,足以支撑
+	# duration() / window() 这些纯时间轴查询。
+	if audio_path == "" and audio == null and waveform == null:
+		return []
+	if _seg_cache.is_empty():
+		var seg := CueAudioSegment.new(&"", audio_path, 0.0)
+		seg.stream = audio
+		seg.waveform = waveform
+		_seg_cache = [seg] as Array[CueAudioSegment]
+	return _seg_cache
+
+
+## 把兼容字段就地升级成 segments[0]。已经是 segments 形式时是空操作。
+## 由面板在「分析波形」时调用 —— 一次性、显式、可 undo。
+func migrate_legacy() -> bool:
+	if not segments.is_empty():
+		return false
+	if audio_path == "" and audio == null:
+		return false
+	var seg := CueAudioSegment.new(&"", audio_path, 0.0)
+	seg.stream = audio
+	seg.waveform = waveform
+	segments = [seg] as Array[CueAudioSegment]
+	audio = null
+	audio_path = ""
+	waveform = null
+	_seg_cache.clear()
+	emit_changed()
+	return true
+
+
+func segment_count() -> int:
+	return all_segments().size()
+
+
+## 覆盖 [param t] 的片段;没有则返回 null。重叠时取第一个。
+func segment_at(t: float) -> CueAudioSegment:
+	for seg in all_segments():
+		if seg.covers(t):
+			return seg
+	return null
+
+
+## 整条时间轴的长度 = 最靠后的片段结束时刻。
 func duration() -> float:
-	if waveform != null and waveform.duration > 0.0:
-		return waveform.duration
-	if audio != null:
-		return audio.get_length()
-	return 0.0
+	var d := 0.0
+	for seg in all_segments():
+		d = maxf(d, seg.end())
+	return d
 
 
 ## 把时间吸附到帧边界。
@@ -186,6 +254,37 @@ func count_in_track(track_name: StringName) -> int:
 	return n
 
 
+func add_segment(seg: CueAudioSegment) -> void:
+	segments.append(seg)
+	_seg_cache.clear()
+	touch()
+
+
+func remove_segment(seg: CueAudioSegment) -> void:
+	var i := segments.find(seg)
+	if i >= 0:
+		segments.remove_at(i)
+		_seg_cache.clear()
+		touch()
+
+
+func insert_segment(seg: CueAudioSegment, index: int) -> void:
+	segments.insert(clampi(index, 0, segments.size()), seg)
+	_seg_cache.clear()
+	touch()
+
+
+func index_of_segment(seg: CueAudioSegment) -> int:
+	return segments.find(seg)
+
+
+## 供 undo 使用,理由同 [method set_marker_time]。
+func set_segment_offset(seg: CueAudioSegment, v: float) -> void:
+	if seg != null:
+		seg.offset = v
+		touch()
+
+
 func track_color(track_name: StringName, fallback: Color) -> Color:
 	for t in tracks:
 		if t != null and t.name == track_name:
@@ -208,6 +307,10 @@ func validate() -> PackedStringArray:
 		if seen.has(m.name):
 			issues.append("标记名重复:「%s」。" % m.name)
 		seen[m.name] = true
+
+	for seg in all_segments():
+		if seg.path == "" and seg.stream == null:
+			issues.append("片段「%s」既没有 path 也没有 stream。" % seg.label())
 	return issues
 
 

@@ -204,13 +204,21 @@ func _run() -> void:
 	# ── 振幅包络随「分析波形」一起生成 ──────────────────────────────
 	await panel.call("analyze_waveform")
 	await get_tree().process_frame
+	# 旧的单音频 sheet 应该在分析时就地升级成 segments 形式(D10′)
+	_ok(sheet.segments.size() == 1, "兼容字段升级成了 1 个片段(得到 %d)" % sheet.segments.size())
+	_ok(sheet.audio_path == "" and sheet.waveform == null, "升级后旧字段已清空")
+	var seg0: CueAudioSegment = sheet.all_segments()[0]
+	_ok(seg0.has_waveform(), "片段拿到了波形缓存")
+	_ok(not seg0.waveform_stale(), "波形与源文件哈希匹配")
+
 	var env: CueEnvelope = sheet.envelope
 	_ok(env != null and env.is_valid(), "分析波形时顺带生成了振幅包络")
 	if env != null and env.is_valid():
 		_ok(absf(env.peak() - 1.0) < 0.02, "包络已归一化(峰值 %.3f)" % env.peak())
-		_ok(env.count() > 0 and absf(env.duration - sheet.waveform.duration) < 0.05,
-			"包络时长与波形一致(%.2f vs %.2f)" % [env.duration, sheet.waveform.duration])
-		_ok(env.source_hash == sheet.waveform.source_hash, "包络与波形用同一个音频哈希")
+		_ok(env.count() > 0 and absf(env.duration - sheet.duration()) < 0.05,
+			"包络时长与时间轴一致(%.2f vs %.2f)" % [env.duration, sheet.duration()])
+		_ok(env.source_hash == seg0.waveform.source_hash, "包络与波形用同一个音频哈希")
+
 		# 纯函数
 		var a1 := env.at(0.37)
 		var same := true
@@ -218,6 +226,13 @@ func _run() -> void:
 			if not is_equal_approx(env.at(0.37), a1):
 				same = false
 		_ok(same, "envelope.at() 在编辑器里也是纯函数")
+
+	# 增量分析:已经有有效波形的片段不该被重算
+	var before_wf: WaveformCache = seg0.waveform
+	await panel.call("analyze_waveform")
+	await get_tree().process_frame
+	_ok(sheet.all_segments()[0].waveform == before_wf,
+		"再点一次分析:哈希没变的片段复用原缓存,不重算")
 
 	# ── 剧本骨架:在真实编辑器里编译一次 ────────────────────────────
 	# 单元测试里 Cue 这个自动加载解析不了,只能编译打了桩的版本;

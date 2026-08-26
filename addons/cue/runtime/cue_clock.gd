@@ -27,13 +27,19 @@ static var extra_latency: float = -1.0
 const SETTING_EXTRA_LATENCY := "cue/playback/extra_latency_ms"
 
 var fps: float = 30.0
+## 当前用作时间锚点的播放器。多片段时由 [Cue] 每帧切换成"覆盖当前时刻的那一段"。
 var player: AudioStreamPlayer = null
+## 锚点片段在 sheet 时间轴上的起点。播放位置是段内的,要加上它才是 sheet 时间。
+var anchor_offset: float = 0.0
 
 var _movie: bool = false
 var _start_frame: int = 0
 var _start_offset: float = 0.0
 var _running: bool = false
 var _frozen: float = 0.0
+# 片段之间没有音频在响时的续推基准。
+var _wall_base: float = 0.0
+var _wall_start_us: int = 0
 
 
 func _init(p_fps: float = 30.0, p_player: AudioStreamPlayer = null) -> void:
@@ -92,6 +98,8 @@ func start(from: float = 0.0) -> void:
 	_start_offset = maxf(from, 0.0)
 	_start_frame = _frame_counter()
 	_frozen = _start_offset
+	_wall_base = _start_offset
+	_wall_start_us = Time.get_ticks_usec()
 	_running = true
 
 
@@ -118,13 +126,24 @@ func now() -> float:
 	if _movie:
 		# 纯帧计数 —— 不读任何音频状态,因此是确定性的。
 		return _start_offset + float(_frame_counter() - _start_frame) / fps
-	if player == null or not player.playing:
-		return _frozen
-	var t := player.get_playback_position()
-	t += AudioServer.get_time_since_last_mix()
-	t -= AudioServer.get_output_latency()
-	t -= extra_latency_seconds()
-	return maxf(t, 0.0)
+	if player != null and player.playing and not player.stream_paused:
+		var t := anchor_offset + player.get_playback_position()
+		t += AudioServer.get_time_since_last_mix()
+		t -= AudioServer.get_output_latency()
+		t -= extra_latency_seconds()
+		t = maxf(t, 0.0)
+		# 记下锚点,片段结束后好从这里continue往下推
+		_wall_base = t
+		_wall_start_us = Time.get_ticks_usec()
+		return t
+
+	# 没有音频锚点 —— 片段之间的空隙,或者最后一段已经放完。
+	#
+	# 这是 CueClock [b]唯一[/b]直接读系统时钟的地方,也是唯一允许的地方:
+	# 它本身就是"时间源抽象",而这条分支只在实时预览下走得到。
+	# 离线渲染永远走上面的帧计数分支,确定性不受影响
+	# (CLAUDE.md 禁止的是[b]运行时逻辑[/b]绕过 CueClock 直接读时钟)。
+	return _wall_base + float(Time.get_ticks_usec() - _wall_start_us) / 1_000_000.0
 
 
 ## 把时间量化到帧边界。离线渲染下标记触发帧号必须是确定的整数。

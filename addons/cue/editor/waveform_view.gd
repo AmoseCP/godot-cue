@@ -135,16 +135,9 @@ func _draw() -> void:
 
 	_draw_lane_bands()
 
-	var wf := state.sheet.waveform
-	if wf == null or not wf.is_valid():
-		_draw_hint("这个 CueSheet 还没有波形缓存 —— 点工具栏的「分析波形」")
-	else:
-		if _lines_dirty:
-			_rebuild_lines(wf)
-		var mid := _wave_center_y()
-		draw_line(Vector2(0, mid), Vector2(size.x, mid), _c_mid, 1.0)
-		if _wave_lines.size() >= 2:
-			draw_multiline(_wave_lines, _c_wave, 1.0)
+	if _lines_dirty:
+		_rebuild_lines()
+	_draw_segments()
 
 	_draw_markers()
 	_draw_playhead()
@@ -166,55 +159,111 @@ func _draw_lane_bands() -> void:
 		draw_line(Vector2(0, limit), Vector2(size.x, limit), _c_mid, 1.0)
 
 
+## 每段音频占波形区里的一条横带。多角色分轨时一眼看得出谁在什么时候说话。
+func _segment_band(index: int, total: int) -> Rect2:
+	var top := _wave_top()
+	var h := _wave_height() / float(maxi(total, 1))
+	return Rect2(0.0, top + h * float(index), size.x, h)
+
+
 ## 每个像素列一条竖线,坐标一次性算好。一列覆盖的 bucket 数随缩放变化:
 ## 拉远时一列聚合很多 bucket(取包络的并集),拉近时若干列共用一个 bucket。
-func _rebuild_lines(wf: WaveformCache) -> void:
+##
+## 多段时把所有段的线段拼进[b]同一个[/b]数组,一次 draw_multiline 画完 ——
+## 每段各调一次会让分轨多的 sheet 出现明显的绘制开销。
+func _rebuild_lines() -> void:
 	_lines_dirty = false
-	var w := int(size.x)
 	var pts := PackedVector2Array()
-	if w <= 0 or wf.bucket_count() == 0:
-		_wave_lines = pts
+	_wave_lines = pts
+	if state == null or state.sheet == null:
+		return
+	var w := int(size.x)
+	if w <= 0:
+		return
+	var segs := state.sheet.all_segments()
+	if segs.is_empty():
 		return
 
-	var spb := wf.seconds_per_bucket()
-	if spb <= 0.0:
-		_wave_lines = pts
-		return
-
-	var half := _wave_height() * 0.5
-	var mid := _wave_center_y()
-	var n := wf.bucket_count()
-	var mins := wf.mins
-	var maxs := wf.maxs
-
-	pts.resize(w * 2)
+	pts.resize(w * 2 * segs.size())
 	var used := 0
-	for x in w:
-		var t0 := state.x_to_time(float(x))
-		var t1 := state.x_to_time(float(x) + 1.0)
-		var b0 := int(floor(t0 / spb))
-		var b1 := int(ceil(t1 / spb))
-		if b1 <= b0:
-			b1 = b0 + 1
-		b0 = maxi(b0, 0)
-		b1 = mini(b1, n)
-		if b0 >= n or b1 <= 0:
+	for si in segs.size():
+		var seg := segs[si]
+		if not seg.has_waveform():
 			continue
-		var lo := 1.0
-		var hi := -1.0
-		for b in range(b0, b1):
-			var mn: float = mins[b]
-			var mx: float = maxs[b]
-			if mn < lo: lo = mn
-			if mx > hi: hi = mx
-		if hi < lo:
+		var wf := seg.waveform
+		var spb := wf.seconds_per_bucket()
+		if spb <= 0.0:
 			continue
-		var fx := float(x) + 0.5
-		pts[used] = Vector2(fx, mid - hi * half)
-		pts[used + 1] = Vector2(fx, mid - lo * half)
-		used += 2
+		var band := _segment_band(si, segs.size())
+		var mid := band.position.y + band.size.y * 0.5
+		var half := band.size.y * 0.5 - 2.0
+		var n := wf.bucket_count()
+		var mins := wf.mins
+		var maxs := wf.maxs
+
+		for x in w:
+			# x 是 sheet 时间轴上的像素,要减掉片段偏移才是段内时间
+			var t0 := state.x_to_time(float(x)) - seg.offset
+			var t1 := state.x_to_time(float(x) + 1.0) - seg.offset
+			if t1 < 0.0:
+				continue
+			var b0 := int(floor(t0 / spb))
+			var b1 := int(ceil(t1 / spb))
+			if b1 <= b0:
+				b1 = b0 + 1
+			b0 = maxi(b0, 0)
+			b1 = mini(b1, n)
+			if b0 >= n or b1 <= 0:
+				continue
+			var lo := 1.0
+			var hi := -1.0
+			for b in range(b0, b1):
+				var mn: float = mins[b]
+				var mx: float = maxs[b]
+				if mn < lo: lo = mn
+				if mx > hi: hi = mx
+			if hi < lo:
+				continue
+			var fx := float(x) + 0.5
+			pts[used] = Vector2(fx, mid - hi * half)
+			pts[used + 1] = Vector2(fx, mid - lo * half)
+			used += 2
 	pts.resize(used)
 	_wave_lines = pts
+
+
+func _draw_segments() -> void:
+	var segs := state.sheet.all_segments()
+	if segs.is_empty():
+		_draw_hint("这个 CueSheet 还没有音频片段 —— 在 Inspector 里往 segments 加一段")
+		return
+
+	var any_wave := false
+	for si in segs.size():
+		var seg := segs[si]
+		var band := _segment_band(si, segs.size())
+		var mid := band.position.y + band.size.y * 0.5
+		# 段落之间画一条分隔线,并标出这段音频实际覆盖的时间范围
+		if si > 0:
+			draw_line(band.position, Vector2(size.x, band.position.y), _c_mid, 1.0)
+		var x0 := state.time_to_x(seg.offset)
+		var x1 := state.time_to_x(seg.end())
+		if x1 > 0.0 and x0 < size.x:
+			draw_rect(Rect2(maxf(x0, 0.0), band.position.y,
+				minf(x1, size.x) - maxf(x0, 0.0), band.size.y),
+				Color(_c_wave, 0.05))
+		draw_line(Vector2(0, mid), Vector2(size.x, mid), _c_mid, 1.0)
+		if seg.has_waveform():
+			any_wave = true
+		if _font != null and segs.size() > 1:
+			draw_string(_font, Vector2(4.0, band.position.y + float(_font_size)),
+				seg.label(), HORIZONTAL_ALIGNMENT_LEFT, -1,
+				maxi(_font_size - 2, 8), Color(_c_text, 0.45))
+
+	if _wave_lines.size() >= 2:
+		draw_multiline(_wave_lines, _c_wave, 1.0)
+	elif not any_wave:
+		_draw_hint("还没有波形缓存 —— 点工具栏的「分析波形」")
 
 
 func _draw_markers() -> void:
