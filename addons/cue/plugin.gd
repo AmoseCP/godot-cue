@@ -50,6 +50,16 @@ func _register_settings() -> void:
 	})
 	ProjectSettings.set_as_basic(key, true)
 
+	var fk := CueFFmpeg.SETTING_PATH
+	if not ProjectSettings.has_setting(fk):
+		ProjectSettings.set_setting(fk, "")
+	ProjectSettings.set_initial_value(fk, "")
+	ProjectSettings.add_property_info({
+		"name": fk,
+		"type": TYPE_STRING,
+		"hint": PROPERTY_HINT_GLOBAL_FILE,
+	})
+
 
 ## 在文件系统里双击 .tres 的 CueSheet 时接管它。
 func _handles(object: Object) -> bool:

@@ -62,6 +62,19 @@ const _CHUNK_HEADER := 8
 ## 打开一个音频源。[param audio_path] 是 res:// 下的源 WAV 路径,
 ## [param stream] 是导入后的资源(任一为空都可以,但不能都为空)。
 static func open(audio_path: String, stream: AudioStream = null) -> Source:
+	# 压缩格式先借 ffmpeg 转成 WAV(见 CueFFmpeg 的说明)
+	if audio_path != "" and CueFFmpeg.needs_convert(audio_path):
+		var errs: Array = []
+		var converted := CueFFmpeg.to_wav(audio_path, errs)
+		if converted != "":
+			var conv := read_wav_file(converted)
+			if conv.ok():
+				return conv
+			return conv
+		var bad_fmt := Source.new()
+		bad_fmt.error = String(errs[0]) if not errs.is_empty() else "Cue:转码失败。"
+		return bad_fmt
+
 	if audio_path != "" and audio_path.get_extension().to_lower() == "wav" \
 			and FileAccess.file_exists(audio_path):
 		var src := read_wav_file(audio_path)
@@ -77,6 +90,10 @@ static func open(audio_path: String, stream: AudioStream = null) -> Source:
 	var bad := Source.new()
 	if stream == null:
 		bad.error = "Cue:没有可分析的音频。请在 CueSheet 上设置 audio 或 audio_path。"
+	elif stream is AudioStreamMP3 or stream is AudioStreamOggVorbis:
+		# 有压缩流但没有源文件路径 —— 没法交给 ffmpeg,只能让用户补路径
+		bad.error = "Cue:这是 %s,GDScript 解不了。请在片段上填 path 指向源文件,Cue 会用 ffmpeg 自动转码;或者直接用 16-bit PCM WAV。" \
+			% stream.get_class()
 	else:
 		bad.error = "Cue:不支持的音频类型 %s。波形分析只支持 16-bit PCM WAV(见 README)。" \
 			% stream.get_class()

@@ -70,6 +70,8 @@ run_script "导入器(Rhubarb / TextGrid)"            tests/test_import.gd
 run_script "多音频片段(D10′)"                     tests/test_segments.gd
 run_script "轨道泳道几何与折叠"                     tests/test_lanes.gd
 run_script "振幅包络与剧本骨架生成"                 tests/test_export.gd
+run_script "字幕文本对照"                           tests/test_subtitles.gd
+run_script "MP3 / OGG 经 ffmpeg 预转"               tests/test_ffmpeg.gd
 
 run_harness "编辑器:插件反复启停无泄漏" \
 	"res://tests/toggle_harness/plugin.cfg" TOGGLE 500

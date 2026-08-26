@@ -98,6 +98,7 @@ Rhubarb JSON → 导入器 → `mouth` 轨 → `CueMouthShape` → `Sprite2D`。
 | 点轨道头的箭头 / 双击轨道头 | 折叠 / 展开该轨 |
 | 点轨道头的名字 | 设为「加标记」的目标轨 |
 | 工具栏的折叠 / 展开按钮 | 一次性折叠或展开所有轨 |
+| 工具栏「字幕」勾选 | 泳道里显示文本还是标记名 |
 | 工具栏「导出」菜单 | 标记 JSON/CSV、包络 JSON/CSV、剧本骨架 |
 
 标记只能在**自己的泳道里**点选,波形区里点击一律是移动播放头 ——
@@ -408,6 +409,47 @@ rhubarb -f json -o mouth.json voice.wav
 
 ---
 
+## 字幕文本与波形对照
+
+标记的 `payload.text` 会显示出来 —— MFA TextGrid 导入器写词级 / 音素级文本,
+手工加的对白标记也可以自己填。
+
+- **泳道里**显示文本而不是标记名(核字幕时,`m_0007` 远不如「你好」有用),
+  带 `end` 的标记还会画出它覆盖的时间跨度
+- **波形下方的字幕条**显示播放头此刻每条文本轨上的内容;
+  没有任何文本轨时整条收起,不占地方
+- 工具栏的「字幕」勾选框可以切回显示标记名
+
+```gdscript
+sheet.text_at(t, &"words")   # 该时刻这条轨上的文本
+sheet.text_tracks()          # 哪些轨带文本
+```
+
+越过 `end` 之后文本会消失,所以 MFA 的词级切分不会让上一个词一直挂着。
+
+---
+
+## MP3 / OGG:借外部 ffmpeg
+
+GDScript 解不了压缩音频,而计划不允许引入任何需要编译的依赖(D1),
+所以走外部 ffmpeg 预转。**ffmpeg 是可选的** —— 没有它插件其余部分照常工作,
+只是 MP3/OGG 会给出一条说明怎么装的提示。
+
+装好之后什么都不用做:`.mp3` / `.ogg` / `.m4a` / `.flac` / `.opus` 直接分析,
+转出来的 WAV 按源文件哈希缓存在 `user://cue_cache/`,同一个文件不会重复转码。
+
+找不到 ffmpeg 时,可以在**项目设置 → Cue → Audio → Ffmpeg Path** 填绝对路径 ——
+Godot 的 `OS.execute()` 不走 shell,从 Dock 启动的编辑器拿到的 `PATH`
+往往不含 Homebrew 目录,所以 Cue 会先查几个常见安装位置再问 `which`。
+
+> 转出来的 WAV 写在 `user://` 下,按源文件哈希命名,既不放在源文件旁边
+> 也永不覆盖源文件 —— 它是派生缓存,不违反 D8「只读音频,永不写音频」。
+
+注意采样率不保证与源一致:Opus 一律重采样到 48kHz。这没关系,
+波形缓存记的是转码后的采样率,时间轴自洽。
+
+---
+
 ## 音画同步微调
 
 macOS 上 `AudioServer.get_output_latency()` 实测返回 `0.0`
@@ -435,12 +477,14 @@ addons/cue/
 │   ├── waveform_builder.gd         # 分块峰值计算
 │   ├── cue_envelope.gd             # 振幅包络 + JSON/CSV 导出
 │   ├── marker_export.gd            # 标记 JSON/CSV 导出与回读
+│   ├── ffmpeg_bridge.gd            # MP3/OGG 预转 WAV(可选依赖)
 │   ├── envelope_builder.gd         # 从峰值缓存推包络
 │   └── script_generator.gd         # 标记 → GDScript 骨架
 ├── editor/                         # 只在编辑器里跑
 │   ├── cue_panel.gd/.tscn          # 底部面板,唯一执行编辑的地方
 │   ├── waveform_view.gd            # 波形 + 轨道泳道的绘制与交互
 │   ├── track_headers.gd            # 左侧轨道头,折叠开关
+│   ├── subtitle_bar.gd             # 字幕条
 │   ├── ruler.gd  transport.gd
 │   ├── cue_view_state.gd           # 共享视图状态 + 泳道几何
 │   └── inspector_plugin.gd
@@ -488,6 +532,8 @@ tests/determinism.sh             # 只跑双次渲染哈希比对
 | `tests/test_import.gd` | Rhubarb / TextGrid 解析 | 50 |
 | `tests/test_segments.gd` | 多音频片段:几何、兼容升级、重叠与空隙 | 54 |
 | `tests/test_lanes.gd` | 轨道泳道几何、折叠、命中测试 | 32 |
+| `tests/test_subtitles.gd` | 字幕文本按时间查找、跨度消失 | 24 |
+| `tests/test_ffmpeg.gd` | MP3/OGG 真转码、缓存、缺工具提示 | 32 |
 | `tests/test_export.gd` | 振幅包络、剧本生成(含真编译一遍)、标记导出往返 | 96 |
 | `tests/edit_harness/` | undo/redo、持久化、导入、泳道、包络、剧本、片段升级(需编辑器) | 102 |
 | `tests/toggle_harness/` | 插件反复启停无泄漏(需编辑器) | 10 轮 |
