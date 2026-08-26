@@ -96,12 +96,15 @@ Rhubarb JSON → 导入器 → `mouth` 轨 → `CueMouthShape` → `Sprite2D`。
 | 滚轮 | 缩放(鼠标底下的点不跑位) |
 | `Ctrl` + 滚轮 | 快速缩放 |
 | 中键拖动 | 平移 |
+| `[` / `]` | 跳到**当前轨**的上/下一个标记 |
+| `Shift` + `[` / `]` | 跨全部轨道跳 |
 | `Ctrl+Z` / `Ctrl+Y` | 撤销 / 重做 |
 | 拖动片段把手 | 前后移动整段音频 |
 | 点轨道头的箭头 / 双击轨道头 | 折叠 / 展开该轨 |
 | 点轨道头的名字 | 设为「加标记」的目标轨 |
 | 工具栏的折叠 / 展开按钮 | 一次性折叠或展开所有轨 |
 | 工具栏「字幕」勾选 | 泳道里显示文本还是标记名 |
+| 工具栏「列表」勾选 | 右侧可搜索的标记列表 |
 | 工具栏「频谱」勾选 | 波形 / 频谱图切换 |
 | 工具栏「导出」菜单 | 标记 JSON/CSV、包络 JSON/CSV、剧本骨架 |
 
@@ -260,6 +263,36 @@ sheet.all_segments()      # 全部片段
 可运行示例:`examples/multi_voice/main.tscn`
 
 ![多角色分轨](docs/multi-voice-example.png)
+
+---
+
+## 找标记:一集有几千个
+
+我自己的规模测试用的量级是 **2320 个标记**(4 段音频、3 条轨、480 秒)——
+那是一集的真实体量。在这个规模下靠拖滚动条是找不到 `peter_line_7` 的。
+
+**`[` / `]` 跳到上/下一个标记,默认只在当前轨内跳。** 这条默认值是关键:
+口型轨有几千个标记,跨轨跳的话按一次 `]` 只前进几毫秒,完全没用。
+按住 `Shift` 才跨全部轨道。
+
+**右侧的标记列表可搜索**,同时匹配标记名和 `payload.text` ——
+核字幕时按内容("你好")找比按 `m_0007` 找自然。勾上「只看当前轨」
+就能把几千个口型标记挡在外面。
+
+结果超过 300 条时列表会**明说**截掉了多少(`显示 300 / 共 2320 条`),
+而不是悄悄截断 —— 悄悄截断会让人以为"就这么多了"。
+
+实测 2320 个标记下:空查询刷新 **1ms**,边打字边刷新每次 **1ms**。
+
+运行时也能查:
+
+```gdscript
+Cue.next_marker(track)     # 当前时刻之后的第一个,严格大于
+Cue.prev_marker(track)     # 之前的最后一个,严格小于
+sheet.search(query, track) # 名字与 payload.text 都参与匹配
+```
+
+严格大于/小于是有意的:站在一个标记上按「下一个」不该原地不动。
 
 ---
 
@@ -546,6 +579,7 @@ addons/cue/
 │   ├── waveform_view.gd            # 波形 + 轨道泳道的绘制与交互
 │   ├── track_headers.gd            # 左侧轨道头,折叠开关
 │   ├── subtitle_bar.gd             # 字幕条
+│   ├── marker_list.gd              # 可搜索的标记列表
 │   ├── ruler.gd  transport.gd
 │   ├── cue_view_state.gd           # 共享视图状态 + 泳道几何
 │   ├── cue_waveform_geometry.gd    # 片段带 / 把手 / 命中测试(纯函数)
@@ -621,7 +655,7 @@ headless 部分在 **Linux 和 Windows** 上由 GitHub Actions 每次推送自�
 | `tests/test_core.gd` | PCM 解码、峰值、缓存、排序、吸附、绘制性能 | 70 |
 | `tests/test_runtime.gd` | `Cue` / `CueClock` / `CueMouthShape`、`at()` 边界、跨片段 | 65 |
 | `tests/test_import.gd` | Rhubarb / TextGrid 解析 | 50 |
-| `tests/test_segments.gd` | 多音频片段:几何、兼容升级、重叠与空隙、排序缓存失效 | 63 |
+| `tests/test_segments.gd` | 多音频片段、排序缓存失效、标记导航与搜索 | 85 |
 | `tests/test_lanes.gd` | 轨道泳道几何、折叠、命中测试 | 32 |
 | `tests/test_geometry.gd` | 波形视图几何:片段带、把手/标记命中、区域分界 | 31 |
 | `tests/test_subtitles.gd` | 字幕文本按时间查找、跨度消失 | 24 |

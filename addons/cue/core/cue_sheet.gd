@@ -94,6 +94,48 @@ func has(marker_name: StringName) -> bool:
 	return find(marker_name) != null
 
 
+## [param t] 之后的第一个标记([param track] 为空则跨全部轨道)。
+##
+## 严格大于 [param t] —— 否则站在一个标记上按"下一个"会原地不动。
+func next_marker(t: float, track: StringName = &"") -> CueMarker:
+	for m in sorted():
+		if m.time > t and (track == &"" or m.track == track):
+			return m
+	return null
+
+
+## [param t] 之前的最后一个标记。严格小于,理由同上。
+func prev_marker(t: float, track: StringName = &"") -> CueMarker:
+	var best: CueMarker = null
+	for m in sorted():
+		if m.time >= t:
+			break
+		if track == &"" or m.track == track:
+			best = m
+	return best
+
+
+## 名字里包含 [param query] 的标记(不区分大小写),按时间排序。
+## 给标记列表的搜索框用 —— 一集几千个标记,靠滚动条找不到 peter_line_7。
+func search(query: String, track: StringName = &"") -> Array[CueMarker]:
+	var out: Array[CueMarker] = []
+	var q := query.strip_edges().to_lower()
+	for m in sorted():
+		if track != &"" and m.track != track:
+			continue
+		if q == "":
+			out.append(m)
+			continue
+		if String(m.name).to_lower().contains(q):
+			out.append(m)
+			continue
+		# 文本也参与匹配 —— 核字幕时按内容找比按标记名找自然
+		var txt := String(m.payload.get("text", ""))
+		if txt != "" and txt.to_lower().contains(q):
+			out.append(m)
+	return out
+
+
 func in_track(track: StringName) -> Array[CueMarker]:
 	var out: Array[CueMarker] = []
 	for m in sorted():

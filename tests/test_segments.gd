@@ -16,6 +16,7 @@ func _init() -> void:
 	_test_mutations()
 	_test_validate()
 	_test_sort_cache_invalidation()
+	_test_navigation()
 	print("\n=== %d 通过 / %d 失败 ===" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -250,3 +251,51 @@ func _names(sheet: CueSheet) -> Array:
 	for m in sheet.sorted():
 		out.append(String(m.name))
 	return out
+
+func _test_navigation() -> void:
+	print("\n[导航] next / prev / search")
+	var sheet := CueSheet.new()
+	sheet.fps = 30
+	sheet.add_marker(CueMarker.new(&"peter_line_1", 1.0, &"dialogue"))
+	sheet.add_marker(CueMarker.new(&"m_0001", 1.2, &"mouth"))
+	sheet.add_marker(CueMarker.new(&"john_line_1", 2.0, &"dialogue"))
+	sheet.add_marker(CueMarker.new(&"m_0002", 2.4, &"mouth"))
+	sheet.add_marker(CueMarker.new(&"peter_line_2", 3.0, &"dialogue"))
+	var withtext := CueMarker.new(&"w_0007", 3.5, &"words")
+	withtext.payload = {"text": "你好世界"}
+	sheet.add_marker(withtext)
+
+	# next:严格大于,否则站在标记上按「下一个」会原地不动
+	eq(String(sheet.next_marker(0.0).name), "peter_line_1", "开头之后的第一个")
+	eq(String(sheet.next_marker(1.0).name), "m_0001", "正好站在标记上时跳到下一个,不原地不动")
+	eq(String(sheet.next_marker(1.1).name), "m_0001", "两个标记之间")
+	ok(sheet.next_marker(99.0) == null, "末尾之后没有下一个")
+
+	# prev:严格小于
+	ok(sheet.prev_marker(0.0) == null, "开头之前没有上一个")
+	ok(sheet.prev_marker(1.0) == null, "正好站在第一个标记上时没有上一个")
+	eq(String(sheet.prev_marker(2.5).name), "m_0002", "2.5s 之前的最后一个")
+	eq(String(sheet.prev_marker(99.0).name), "w_0007", "末尾之后的上一个是最后那个")
+
+	# 限定轨道 —— 口型轨几千个标记时,按对白轨跳才有意义
+	eq(String(sheet.next_marker(1.0, &"dialogue").name), "john_line_1",
+		"限定 dialogue 轨时跳过中间的口型标记")
+	eq(String(sheet.prev_marker(2.5, &"dialogue").name), "john_line_1",
+		"限定轨道的 prev")
+	ok(sheet.next_marker(1.0, &"根本没这条轨") == null, "不存在的轨返回 null")
+
+	# search
+	eq(sheet.search("peter").size(), 2, "按名字搜到两个 peter")
+	eq(String(sheet.search("peter")[0].name), "peter_line_1", "搜索结果按时间排序")
+	eq(sheet.search("PETER").size(), 2, "不区分大小写")
+	eq(sheet.search("").size(), sheet.markers.size(), "空查询返回全部")
+	eq(sheet.search("你好").size(), 1, "payload.text 也参与匹配")
+	eq(String(sheet.search("你好")[0].name), "w_0007", "按内容找到了那条")
+	eq(sheet.search("m_", &"mouth").size(), 2, "可以限定轨道")
+	eq(sheet.search("不存在的东西").size(), 0, "搜不到就是空")
+
+	# 空 sheet 不能崩
+	var empty := CueSheet.new()
+	ok(empty.next_marker(0.0) == null, "空 sheet 的 next")
+	ok(empty.prev_marker(0.0) == null, "空 sheet 的 prev")
+	eq(empty.search("x").size(), 0, "空 sheet 的 search")

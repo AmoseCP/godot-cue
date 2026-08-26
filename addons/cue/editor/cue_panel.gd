@@ -25,6 +25,7 @@ var _ruler: CueRuler = null
 var _view: CueWaveformView = null
 var _headers: CueTrackHeaders = null
 var _subtitles: CueSubtitleBar = null
+var _marker_list: CueMarkerList = null
 var _hscroll: HScrollBar = null
 var _player: AudioStreamPlayer = null
 var _clock: CueClock = null
@@ -81,6 +82,10 @@ func _ready() -> void:
 	_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	body.add_child(_view)
 
+	_marker_list = CueMarkerList.new()
+	_marker_list.setup(state)
+	body.add_child(_marker_list)
+
 	_subtitles = CueSubtitleBar.new()
 	_subtitles.setup(state)
 	add_child(_subtitles)
@@ -121,6 +126,8 @@ func _ready() -> void:
 		_view.queue_redraw())
 	_transport.spectrogram_toggled.connect(_on_spectrogram_toggled)
 	_transport.audio_action_requested.connect(_audio_action)
+	_transport.marker_list_toggled.connect(func(on: bool) -> void:
+		_marker_list.visible = on)
 	state.view_changed.connect(_schedule_spectrogram)
 	_transport.add_marker_requested.connect(func() -> void: _add_marker(state.maybe_snap(state.playhead)))
 	_transport.zoom_in_requested.connect(func() -> void: state.zoom_at(1.4, size.x * 0.5))
@@ -133,6 +140,12 @@ func _ready() -> void:
 	_view.marker_rename_requested.connect(_begin_rename)
 	_view.seek_requested.connect(_seek)
 	_view.segment_move_requested.connect(_move_segment)
+	_view.jump_requested.connect(_jump_to_marker)
+	_view.marker_selected.connect(func(m: CueMarker) -> void:
+		_marker_list.sync_selection(m))
+	_marker_list.marker_activated.connect(func(m: CueMarker) -> void:
+		_view.select(m)
+		_jump_to_marker(m))
 	_ruler.seek_requested.connect(_seek)
 
 	state.view_changed.connect(_sync_scrollbar)
@@ -354,6 +367,14 @@ func _sniff_json(path: String) -> CueImportResult:
 	return CueRhubarbImporter.parse(path)
 
 
+## 跳到某个标记:移动播放头并把视图带过去。
+func _jump_to_marker(m: CueMarker) -> void:
+	if m == null:
+		return
+	_seek(m.time)
+	state.follow_playhead()
+
+
 # ── 编辑操作:全部转发给 CueEditOps ────────────────────────────────
 #
 # 这几个方法保持原名原签名 —— 它们是面板的对外入口,
@@ -442,6 +463,8 @@ func _after_edit() -> void:
 		state.notify_sheet_edited()
 	if is_instance_valid(_view):
 		_view.queue_redraw()
+	if is_instance_valid(_marker_list):
+		_marker_list.refresh()
 
 
 # ── 频谱图:调度在这里,实现在 CueAnalysisJobs ────────────────────

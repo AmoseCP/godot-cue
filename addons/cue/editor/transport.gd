@@ -15,6 +15,7 @@ signal export_requested(kind: int)
 signal show_text_toggled(on: bool)
 signal spectrogram_toggled(on: bool)
 signal audio_action_requested(action: int)
+signal marker_list_toggled(on: bool)
 signal zoom_in_requested()
 signal zoom_out_requested()
 signal zoom_fit_requested()
@@ -91,6 +92,13 @@ func _build() -> void:
 		state.show_text = on
 		show_text_toggled.emit(on))
 	add_child(text_check)
+
+	var list_check := CheckBox.new()
+	list_check.text = "列表"
+	list_check.button_pressed = true
+	list_check.tooltip_text = "右侧标记列表(可搜索)。几千个标记时靠它找,别拖滚动条"
+	list_check.toggled.connect(func(on: bool) -> void: marker_list_toggled.emit(on))
+	add_child(list_check)
 
 	var spec_check := CheckBox.new()
 	spec_check.text = "频谱"

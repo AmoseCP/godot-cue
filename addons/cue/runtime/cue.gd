@@ -317,6 +317,20 @@ func amplitude_level(thresholds: PackedFloat32Array, t: float = -1.0) -> int:
 	return _sheet.envelope.level(time() if t < 0.0 else t, thresholds)
 
 
+## 当前时刻之后的第一个标记;没有则返回 null。
+func next_marker(track: StringName = &"") -> CueMarker:
+	if _sheet == null:
+		return null
+	return _sheet.next_marker(time(), track)
+
+
+## 当前时刻之前的最后一个标记。
+func prev_marker(track: StringName = &"") -> CueMarker:
+	if _sheet == null:
+		return null
+	return _sheet.prev_marker(time(), track)
+
+
 func markers_in(track: StringName) -> Array[CueMarker]:
 	if _sheet == null:
 		return []

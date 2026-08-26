@@ -19,12 +19,21 @@ var _fail := 0
 
 
 func _init() -> void:
+	# 延迟到场景树建好之后再跑:标记列表要真的 add_child 才会走 _ready,
+	# 在 _init 里加子节点不会触发,refresh() 会提前 return,
+	# 于是性能测试变成空跑(加了 row_count 断言才发现)。
+	_run.call_deferred()
+
+
+func _run() -> void:
+	await process_frame
 	var sheet := _build()
 	_test_sort(sheet)
 	_test_lookup(sheet)
 	_test_draw(sheet)
 	_test_subtitles(sheet)
 	_test_export(sheet)
+	await _test_marker_list(sheet)
 	print("\n=== %d 通过 / %d 失败 ===" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -176,3 +185,53 @@ func _test_export(sheet: CueSheet) -> void:
 	var gd := CueScriptGenerator.generate(sheet, opts)
 	budget(Time.get_ticks_msec() - t0, 300, "生成剧本骨架(仅 dialogue 轨)")
 	ok(gd.count("await Cue.at(") == DIALOGUE_MARKERS, "剧本里的 await 条数正确")
+
+func _test_marker_list(sheet: CueSheet) -> void:
+	print("\n[规模] 标记列表(它存在的理由就是几千个标记下还能用)")
+	var state := CueViewState.new()
+	state.sheet = sheet
+	state.active_track = &"dialogue"
+
+	var list := CueMarkerList.new()
+	list.setup(state)
+	root.add_child(list)
+	await process_frame
+
+	# 空查询 = 最坏情况,全部标记都要过一遍
+	var t0 := Time.get_ticks_msec()
+	list.refresh()
+	var empty_ms := Time.get_ticks_msec() - t0
+	# 先确认它真的干活了 —— 一个提前 return 的 refresh() 也是 0ms,
+	# 不加这条断言的话性能测试可能是空的(CI 上刚栽过同类问题)
+	ok(list.row_count() == CueMarkerList.MAX_ROWS,
+		"真的填了 %d 行(不是空跑)" % list.row_count())
+	budget(empty_ms, 150, "空查询刷新(%d 个标记)" % sheet.markers.size())
+
+	# 打字时每敲一下都会刷新,这才是真正的手感瓶颈
+	t0 = Time.get_ticks_msec()
+	for q in ["l", "li", "lin", "line", "line_0"]:
+		list.set_filter(q)
+	var typing_ms := Time.get_ticks_msec() - t0
+	ok(list.row_count() > 0 and list.row_count() < CueMarkerList.MAX_ROWS,
+		"搜到最后 filter=line_0 时列表里是 %d 行,确实被过滤了" % list.row_count())
+	budget(typing_ms / 5, 60, "边打字边刷新,每次")
+
+	# 只看当前轨:口型轨几千条时,这是找到对白的唯一办法
+	t0 = Time.get_ticks_msec()
+	var dlg := sheet.search("", &"dialogue")
+	budget(Time.get_ticks_msec() - t0, 100, "按轨道过滤")
+	ok(dlg.size() == DIALOGUE_MARKERS,
+		"dialogue 轨 %d 条(总共 %d 条)" % [dlg.size(), sheet.markers.size()])
+
+	# 搜索必须真的能缩小范围
+	var hits := sheet.search("line_00")
+	ok(hits.size() > 0 and hits.size() < sheet.markers.size(),
+		"搜 line_00 命中 %d 条,确实缩小了范围" % hits.size())
+
+	# 结果超过上限时必须[b]明说[/b]被截了多少,不能悄悄截断
+	var shown: int = mini(sheet.search("").size(), CueMarkerList.MAX_ROWS)
+	ok(sheet.search("").size() > CueMarkerList.MAX_ROWS,
+		"这个量级确实会触发截断(%d > %d)" % [sheet.search("").size(), CueMarkerList.MAX_ROWS])
+	ok(shown == CueMarkerList.MAX_ROWS, "截断到 %d 条" % shown)
+
+	list.free()

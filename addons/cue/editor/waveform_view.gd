@@ -20,6 +20,7 @@ signal marker_selected(marker: CueMarker)
 signal seek_requested(time: float)
 signal segment_selected(segment: CueAudioSegment)
 signal segment_move_requested(segment: CueAudioSegment, from_offset: float, to_offset: float)
+signal jump_requested(marker: CueMarker)
 
 const MARKER_LABEL_PAD := 5.0
 ## 几何(泳道区/片段带/把手/命中测试)全在 [CueWaveformGeometry] 里 ——
@@ -547,5 +548,27 @@ func _handle_key(e: InputEventKey) -> void:
 			if _selected != null:
 				marker_rename_requested.emit(_selected)
 				accept_event()
+		KEY_BRACKETLEFT:
+			_jump(false, e.shift_pressed)
+			accept_event()
+		KEY_BRACKETRIGHT:
+			_jump(true, e.shift_pressed)
+			accept_event()
+
+
+## 跳到上/下一个标记。
+##
+## [b]默认只在活动轨内跳[/b]:一集的口型轨有几千个标记,跨轨跳的话
+## 按一次 `]` 只前进几毫秒,完全没用。按住 Shift 才跨全部轨道。
+func _jump(forward: bool, all_tracks: bool) -> void:
+	if state == null or state.sheet == null:
+		return
+	var track := &"" if all_tracks else state.active_track
+	var m: CueMarker = state.sheet.next_marker(state.playhead, track) if forward \
+		else state.sheet.prev_marker(state.playhead, track)
+	if m == null:
+		return
+	select(m)
+	jump_requested.emit(m)
 
 
