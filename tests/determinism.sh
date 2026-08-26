@@ -35,6 +35,16 @@ fi
 
 FAIL=0
 
+## macOS 用 shasum,Linux 用 sha256sum。挑一个存在的。
+if command -v shasum > /dev/null 2>&1; then
+	sha256() { shasum -a 256 "$1" | cut -d' ' -f1; }
+elif command -v sha256sum > /dev/null 2>&1; then
+	sha256() { sha256sum "$1" | cut -d' ' -f1; }
+else
+	echo "找不到 shasum 或 sha256sum,无法做哈希比对" >&2
+	exit 2
+fi
+
 ## 单次渲染的墙钟上限(秒)。正常一个场景 2~5 秒,给到 180 已经很宽。
 ##
 ## 有过一次渲染卡死 56 分钟、一帧都没写出来的经历(在这台机器上没能复现,
@@ -106,8 +116,8 @@ check_scene() {
 		if [ ! -f "$pb" ]; then
 			echo "  FAIL:$name 只在第 1 次渲染中存在"; bad=1; continue
 		fi
-		ha=$(shasum -a 256 "$pa" | cut -d' ' -f1)
-		hb=$(shasum -a 256 "$pb" | cut -d' ' -f1)
+		ha=$(sha256 "$pa")
+		hb=$(sha256 "$pb")
 		if [ "$ha" != "$hb" ]; then
 			if [ -z "$first_bad" ]; then
 				first_bad="$name"
@@ -121,14 +131,14 @@ check_scene() {
 	if [ -n "$first_bad" ]; then
 		echo "  共 $bad / $na 帧不同;现场保留在 $A 与 $B"
 		local ua ub
-		ua=$(find "$A" -name '*.png' -exec shasum -a 256 {} \; | cut -d' ' -f1 | sort -u | wc -l | tr -d ' ')
-		ub=$(find "$B" -name '*.png' -exec shasum -a 256 {} \; | cut -d' ' -f1 | sort -u | wc -l | tr -d ' ')
+		ua=$(for f in "$A"/*.png; do sha256 "$f"; done | sort -u | wc -l | tr -d ' ')
+		ub=$(for f in "$B"/*.png; do sha256 "$f"; done | sort -u | wc -l | tr -d ' ')
 		echo "  A 有 $ua 个不同哈希,B 有 $ub 个(都应等于 $na;小于说明那一次渲染中途卡住了)"
 	fi
 
 	# 自查:每帧都该不一样,否则"两次一致"可能只是"全是空白帧"
 	local uniq
-	uniq=$(find "$A" -name '*.png' -exec shasum -a 256 {} \; | cut -d' ' -f1 | sort -u | wc -l | tr -d ' ')
+	uniq=$(for f in "$A"/*.png; do sha256 "$f"; done | sort -u | wc -l | tr -d ' ')
 	if [ "$uniq" -lt "$na" ]; then
 		echo "  注意:$na 帧里只有 $uniq 个不同哈希,画面可能没在变"
 	fi

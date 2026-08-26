@@ -1,5 +1,7 @@
 # Cue
 
+[![tests](https://github.com/AmoseCP/godot-cue/actions/workflows/tests.yml/badge.svg)](https://github.com/AmoseCP/godot-cue/actions/workflows/tests.yml)
+
 **在音频波形上打命名标记,然后在脚本里 `await` 它们。**
 
 Godot 4.7 编辑器插件 + 运行时库,纯 GDScript,无需编译。
@@ -601,8 +603,18 @@ addons/cue/
 
 ```bash
 tests/run_all.sh                 # 全部机器可验的测试
+tests/run_all.sh <godot> --skip-render   # 跳过需要渲染的部分
 tests/determinism.sh             # 只跑双次渲染哈希比对
 ```
+
+headless 部分在 **Linux 和 Windows** 上由 GitHub Actions 每次推送自动跑
+(开发机只有 macOS,CI 是这个仓库唯一的跨平台验证途径)。
+确定性测试需要真实渲染,runner 没有 GPU/显示器,只能在本地跑。
+
+> **runner 不能只看退出码。** 实测:GDScript 解析错误、类型错误、
+> 甚至脚本文件根本不存在,Godot 都以 **0** 退出。所以 `run_all.sh`
+> 会确认每个套件真的产出了结果行 —— 否则一个编译不过的测试文件
+> 会被当成"通过",套件全绿而测试根本没跑。
 
 | 套件 | 覆盖 | 断言数 |
 |---|---|---|

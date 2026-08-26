@@ -1,0 +1,89 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  GODOT_VERSION: 4.7.2-stable
+
+jobs:
+  # headless 套件在 Linux 和 Windows 上都跑。
+  #
+  # 这是这个仓库唯一的跨平台验证途径 —— 开发机只有 macOS,
+  # 而 PLAN 第 7 节列的风险里有好几条是平台相关的:
+  #   · CueFFmpeg 里那几个 Windows 安装路径和 `where ffmpeg` 分支从没被执行过
+  #   · AudioServer.get_output_latency() 在 macOS 上实测返回 0,别的平台未知
+  #   · 编辑器主题键名、UndoRedo 历史上限,都可能跨平台不同
+  headless:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            os: ubuntu-latest
+            asset: Godot_v4.7.2-stable_linux.x86_64.zip
+          - name: Windows
+            os: windows-latest
+            asset: Godot_v4.7.2-stable_win64.exe.zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 缓存 Godot
+        id: cache-godot
+        uses: actions/cache@v4
+        with:
+          path: godot
+          key: godot-${{ env.GODOT_VERSION }}-${{ matrix.asset }}
+
+      - name: 下载 Godot
+        if: steps.cache-godot.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p godot
+          url="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/${{ matrix.asset }}"
+          echo "下载 $url"
+          curl -fL -o godot.zip "$url"
+          unzip -q godot.zip -d godot
+          rm godot.zip
+
+      - name: 定位可执行文件
+        id: godot
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Windows 的 zip 里同时有窗口版和控制台版,CI 要控制台版才看得到输出。
+          bin=$(find godot -type f \( -name '*console.exe' \) | head -1)
+          if [ -z "$bin" ]; then
+            bin=$(find godot -type f \( -name 'Godot_v*.exe' -o -name 'Godot_v*x86_64' \) | head -1)
+          fi
+          if [ -z "$bin" ]; then
+            echo "在 godot/ 下找不到可执行文件:"; find godot -type f | head -20
+            exit 1
+          fi
+          chmod +x "$bin" || true
+          echo "bin=$bin" >> "$GITHUB_OUTPUT"
+          "$bin" --headless --version
+
+      - name: 跑测试
+        shell: bash
+        # --skip-render:确定性测试要真实渲染,CI runner 没有 GPU/显示器。
+        # 那部分只能在本地跑(见 README 的「测试」一节)。
+        run: bash tests/run_all.sh "${{ steps.godot.outputs.bin }}" --skip-render
+
+      - name: 失败时保留现场
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ matrix.name }}
+          path: |
+            .godot/*.log
+            tests/render_*/**/render.log
+          if-no-files-found: ignore
+          retention-days: 7
