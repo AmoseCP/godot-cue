@@ -10,6 +10,9 @@ const OGG := "res://tests/probe/compressed/tone.ogg"
 
 var _pass := 0
 var _fail := 0
+## 跳过的断言数。必须报出来 —— 否则「因为没装 ffmpeg 所以什么都没测」
+## 和「全测过了」在输出里长得一模一样,CI 会给出虚假的信心。
+var _skip := 0
 
 
 func _init() -> void:
@@ -19,8 +22,13 @@ func _init() -> void:
 		_test_convert()
 		_test_cache()
 	else:
-		print("\n  跳过转码测试:本机没找到 ffmpeg(这不算失败,它是可选依赖)")
-	print("\n=== %d 通过 / %d 失败 ===" % [_pass, _fail])
+		# 这些本来会跑的断言记成跳过,而不是当作不存在
+		_skip = 24
+		print("\n  跳过转码测试:没找到 ffmpeg(可选依赖,不算失败)")
+	if _skip > 0:
+		print("\n=== %d 通过 / %d 失败 / %d 跳过 ===" % [_pass, _fail, _skip])
+	else:
+		print("\n=== %d 通过 / %d 失败 ===" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
 

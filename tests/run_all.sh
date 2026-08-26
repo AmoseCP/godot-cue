@@ -30,6 +30,7 @@ if [ ! -x "$GODOT" ] && ! command -v "$GODOT" > /dev/null 2>&1; then
 fi
 
 FAIL=0
+SKIPPED=0
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -52,7 +53,7 @@ run_script() {
 	"$GODOT" --headless --path . --script "$script" > "$TMP/out" 2>&1
 	local code=$?
 	local line
-	line=$(grep -E "^=== [0-9]+ 通过 / [0-9]+ 失败 ===$" "$TMP/out" | tail -1)
+	line=$(grep -E "^=== [0-9]+ 通过 / [0-9]+ 失败( / [0-9]+ 跳过)? ===$" "$TMP/out" | tail -1)
 	if [ -z "$line" ]; then
 		echo "  ↑ 失败:测试没有产出结果行(退出码 $code) —— 多半是脚本没跑起来"
 		grep -E "SCRIPT ERROR|Parse Error|^ERROR" "$TMP/out" | head -5 | sed 's/^/     /'
@@ -60,6 +61,12 @@ run_script() {
 		return
 	fi
 	echo "  $line"
+	# 跳过不算失败,但必须显眼 —— 「因为缺依赖所以没测」和「测过了」
+	# 在汇总行里长得太像,CI 上尤其容易误判为已覆盖。
+	if echo "$line" | grep -q "跳过"; then
+		grep -E "跳过" "$TMP/out" | head -2 | sed "s/^/  /"
+		SKIPPED=1
+	fi
 	if ! echo "$line" | grep -q "/ 0 失败"; then
 		grep -E "  FAIL" "$TMP/out" | head -10 | sed 's/^/  /'
 		echo "  ↑ 失败"
@@ -149,6 +156,9 @@ else
 fi
 
 echo ""
+if [ "$SKIPPED" -eq 1 ]; then
+	printf '\033[1;33m注意:有套件因缺少可选依赖跳过了部分断言(见上)\033[0m\n'
+fi
 if [ "$FAIL" -eq 0 ]; then
 	printf '\033[1;32m全部通过\033[0m\n'
 else

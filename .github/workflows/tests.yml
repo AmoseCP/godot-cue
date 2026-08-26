@@ -53,6 +53,22 @@ jobs:
           unzip -q godot.zip -d godot
           rm godot.zip
 
+      # 装 ffmpeg 是为了让 CueFFmpeg 的转码路径真的被执行。
+      # 第一次跑 CI 时两个平台都只跑了 8 条断言(本地 32 条)——
+      # 因为找不到 ffmpeg,转码测试全被跳过,而套件照样报绿。
+      # 那次 CI 的「成功」是虚假的信心,这一步就是为了消掉它。
+      #
+      # 顺带这也覆盖了两条从没被执行过的代码路径:
+      #   Linux   → apt 装到 /usr/bin/ffmpeg,命中 COMMON_PATHS
+      #   Windows → choco 装到 PATH 上,走 `where ffmpeg` 兜底分支
+      - name: 安装 ffmpeg(Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
+      - name: 安装 ffmpeg(Windows)
+        if: runner.os == 'Windows'
+        run: choco install ffmpeg -y --no-progress
+
       - name: 定位可执行文件
         id: godot
         shell: bash
