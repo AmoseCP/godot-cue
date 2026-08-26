@@ -541,6 +541,7 @@ addons/cue/
 │   ├── subtitle_bar.gd             # 字幕条
 │   ├── ruler.gd  transport.gd
 │   ├── cue_view_state.gd           # 共享视图状态 + 泳道几何
+│   ├── cue_waveform_geometry.gd    # 片段带 / 把手 / 命中测试(纯函数)
 │   └── inspector_plugin.gd
 ├── runtime/                        # 不依赖编辑器,可导出、可 headless
 │   ├── cue.gd                      # Autoload 单例
@@ -605,6 +606,7 @@ tests/determinism.sh             # 只跑双次渲染哈希比对
 | `tests/test_import.gd` | Rhubarb / TextGrid 解析 | 50 |
 | `tests/test_segments.gd` | 多音频片段:几何、兼容升级、重叠与空隙 | 54 |
 | `tests/test_lanes.gd` | 轨道泳道几何、折叠、命中测试 | 32 |
+| `tests/test_geometry.gd` | 波形视图几何:片段带、把手/标记命中、区域分界 | 31 |
 | `tests/test_subtitles.gd` | 字幕文本按时间查找、跨度消失 | 24 |
 | `tests/test_ffmpeg.gd` | MP3/OGG 真转码、缓存、缺工具提示 | 32 |
 | `tests/test_spectrogram.gd` | FFT 正确性(冲激/直流/双音)、频谱图、性能 | 38 |

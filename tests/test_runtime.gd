@@ -46,6 +46,7 @@ func _run() -> void:
 	await _test_seek_forward_releases_skipped()
 	await _test_await_before_play_and_while_paused()
 	await _test_mouth_auto_rebuild()
+	await _test_after_and_pause_then_stop()
 
 	print("\n=== %d 通过 / %d 失败 ===" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
@@ -640,3 +641,70 @@ func _test_mouth_auto_rebuild() -> void:
 	_cue.load_sheet(_mouth_sheet())
 	await process_frame
 	ok(true, "节点释放后再换 sheet 不报错(信号已断开)")
+
+
+func _test_after_and_pause_then_stop() -> void:
+	print("\n[Cue] after() 与「先暂停再停止」")
+	# 上一轮只改了 at(),after() 里同样有 while _playing。
+	# 同一类错误在别处再找一遍 —— 这次是延迟期间暂停。
+	_cue.load_sheet(_sheet([[&"beat", 0.20]]))
+	var hit: Array[bool] = [false]
+	var t1 := func() -> void:
+		await _cue.after(&"beat", 0.50)
+		hit[0] = true
+	t1.call()
+
+	_cue.play(0.0)
+	# 等 beat 过去,此时正处在 0.5 秒的延迟里
+	for i in 20:
+		await process_frame
+		if _cue.time() > 0.25:
+			break
+	ok(not hit[0], "beat 已过,正在等 0.5 秒的延迟")
+
+	_cue.pause()
+	await _advance(4)
+	ok(not hit[0], "延迟期间暂停,不能提前返回")
+
+	_cue.resume()
+	for i in 60:
+		await process_frame
+		if hit[0]:
+			break
+	ok(hit[0], "恢复后延迟正常走完")
+	ok(_cue.time() >= 0.70, "确实等满了(t=%.2f ≥ 0.20+0.50)" % _cue.time())
+	_cue.stop()
+
+	# 先 pause() 再 stop():stop() 里 was := _playing 已经是 false,
+	# 旧实现会跳过唤醒,挂着的协程永远等不到信号
+	_cue.load_sheet(_sheet([[&"far", 9.0]]))
+	var freed: Array[bool] = [false]
+	var t2 := func() -> void:
+		await _cue.at(&"far")
+		freed[0] = true
+	t2.call()
+	_cue.play(0.0)
+	await _advance(2)
+	_cue.pause()
+	await _advance(2)
+	ok(not freed[0], "暂停期间仍在等待")
+	_cue.stop()
+	await _advance(3)
+	ok(freed[0], "先暂停再停止,协程仍被放行(不会挂死)")
+
+	# after() 在这一轮作废后也要放行
+	_cue.load_sheet(_sheet([[&"g", 0.1]]))
+	var freed2: Array[bool] = [false]
+	var t3 := func() -> void:
+		await _cue.after(&"g", 5.0)
+		freed2[0] = true
+	t3.call()
+	_cue.play(0.0)
+	for i in 20:
+		await process_frame
+		if _cue.time() > 0.2:
+			break
+	ok(not freed2[0], "正在等 5 秒延迟")
+	_cue.stop()
+	await _advance(3)
+	ok(freed2[0], "stop() 也能放行卡在 after() 延迟里的协程")

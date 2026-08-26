@@ -35,17 +35,44 @@ fi
 
 FAIL=0
 
+## 单次渲染的墙钟上限(秒)。正常一个场景 2~5 秒,给到 180 已经很宽。
+##
+## 有过一次渲染卡死 56 分钟、一帧都没写出来的经历(在这台机器上没能复现,
+## 疑似窗口/GPU 层面的环境问题)。不管根因是什么,一个卡住的渲染都不该
+## 把整个套件拖到无限期 —— 宁可在这里响亮地失败。
+RENDER_TIMEOUT=180
+
 render() {
 	local scene="$1" out="$2"
 	rm -rf "$out"; mkdir -p "$out"
 	# --fixed-fps 必须显式传:4.7.2 实测,项目设置 editor/movie_writer/fps
 	# 在独立运行 --write-movie 时[b]不生效[/b],默认按 60fps 录,
 	# 和示例 sheet 的 30fps 对不上。
+	#
+	# macOS 自带的 BSD 工具里没有 coreutils 的 timeout,所以自己看门:
+	# 后台起、轮询、超时就杀。
 	( cd "$ROOT" && "$GODOT" --path . --fixed-fps "$FPS" \
-		--write-movie "$out/f.png" "$scene" ) > "$out/render.log" 2>&1
+		--write-movie "$out/f.png" "$scene" ) > "$out/render.log" 2>&1 &
+	local pid=$!
+	local waited=0
+	while kill -0 "$pid" 2>/dev/null; do
+		if [ "$waited" -ge "$RENDER_TIMEOUT" ]; then
+			kill -9 "$pid" 2>/dev/null
+			wait "$pid" 2>/dev/null
+			echo "  FAIL:渲染超过 ${RENDER_TIMEOUT}s 没结束,已强制终止" >&2
+			echo "        场景 $scene,已写出 $(find "$out" -name '*.png' | wc -l | tr -d ' ') 帧" >&2
+			echo "        日志:$out/render.log" >&2
+			FAIL=1
+			return 1
+		fi
+		sleep 1
+		waited=$((waited + 1))
+	done
+	wait "$pid" 2>/dev/null
 	if [ -f "$ROOT/tests/determinism/fire_log.txt" ]; then
 		cp "$ROOT/tests/determinism/fire_log.txt" "$out/fire_log.txt"
 	fi
+	return 0
 }
 
 check_scene() {
@@ -58,9 +85,9 @@ check_scene() {
 	echo ""
 	echo "── $scene ──"
 	rm -f "$ROOT/tests/determinism/fire_log.txt"
-	echo "  第 1 次渲染..."; render "$scene" "$A"
+	echo "  第 1 次渲染..."; render "$scene" "$A" || return
 	rm -f "$ROOT/tests/determinism/fire_log.txt"
-	echo "  第 2 次渲染..."; render "$scene" "$B"
+	echo "  第 2 次渲染..."; render "$scene" "$B" || return
 
 	local na nb
 	na=$(find "$A" -name '*.png' | wc -l | tr -d ' ')

@@ -21,11 +21,12 @@ signal seek_requested(time: float)
 signal segment_selected(segment: CueAudioSegment)
 signal segment_move_requested(segment: CueAudioSegment, from_offset: float, to_offset: float)
 
-const MARKER_HIT_PX := 7.0
-## 每条片段带顶部这么高的一条是"把手":在这里拖动整段音频,
-## 在带内其他地方点击仍然是移动播放头。分开之后没有歧义。
-const SEG_HANDLE_H := 13.0
 const MARKER_LABEL_PAD := 5.0
+## 几何(泳道区/片段带/把手/命中测试)全在 [CueWaveformGeometry] 里 ——
+## 那部分是纯函数,能脱离编辑器单测;留在 Control 里就只能靠肉眼验。
+const Geom := preload("res://addons/cue/editor/cue_waveform_geometry.gd")
+const SEG_HANDLE_H := Geom.SEG_HANDLE_H
+const MARKER_HIT_PX := Geom.MARKER_HIT_PX
 
 var state: CueViewState = null
 
@@ -142,25 +143,30 @@ func _on_view_changed() -> void:
 	queue_redraw()
 
 
-# ── 几何 ────────────────────────────────────────────────────────────
+# ── 几何:全部转发给 CueWaveformGeometry ──────────────────────────
 
-## 泳道区总高。超过控件一半就截断 —— 轨道很多时不能把波形挤没了。
 func _lanes_h() -> float:
-	if state == null:
-		return 0.0
-	return minf(state.lanes_height(), size.y * 0.6)
+	return Geom.lanes_height(state, size)
 
 
 func _wave_top() -> float:
-	return _lanes_h()
+	return Geom.wave_top(state, size)
 
 
 func _wave_height() -> float:
-	return maxf(size.y - _wave_top(), 1.0)
+	return Geom.wave_height(state, size)
 
 
-func _wave_center_y() -> float:
-	return _wave_top() + _wave_height() * 0.5
+func _segment_band(index: int, total: int) -> Rect2:
+	return Geom.segment_band(state, size, index, total)
+
+
+func _segment_handle_at(pos: Vector2) -> CueAudioSegment:
+	return Geom.segment_handle_at(state, size, pos)
+
+
+func _marker_at(pos: Vector2) -> CueMarker:
+	return Geom.marker_at(state, pos)
 
 
 # ── 绘制 ────────────────────────────────────────────────────────────
@@ -195,13 +201,6 @@ func _draw_lane_bands() -> void:
 		y += h
 	if limit > 0.0:
 		draw_line(Vector2(0, limit), Vector2(size.x, limit), _c_mid, 1.0)
-
-
-## 每段音频占波形区里的一条横带。多角色分轨时一眼看得出谁在什么时候说话。
-func _segment_band(index: int, total: int) -> Rect2:
-	var top := _wave_top()
-	var h := _wave_height() / float(maxi(total, 1))
-	return Rect2(0.0, top + h * float(index), size.x, h)
 
 
 ## 每个像素列一条竖线,坐标一次性算好。一列覆盖的 bucket 数随缩放变化:
@@ -403,24 +402,6 @@ func _draw_segment_handle(seg: CueAudioSegment, band: Rect2, index: int) -> void
 		maxi(_font_size - 2, 8), Color(_c_text, 0.85 if sel else 0.45))
 
 
-## 命中片段把手。返回 null 表示没点在任何把手上。
-func _segment_handle_at(pos: Vector2) -> CueAudioSegment:
-	if pos.y < _lanes_h():
-		return null
-	var segs := state.sheet.all_segments()
-	for si in segs.size():
-		var band := _segment_band(si, segs.size())
-		var h := minf(SEG_HANDLE_H, band.size.y * 0.5)
-		if pos.y < band.position.y or pos.y > band.position.y + h:
-			continue
-		var seg := segs[si]
-		var x0 := state.time_to_x(seg.offset)
-		var x1 := state.time_to_x(seg.end())
-		if pos.x >= x0 and pos.x <= x1:
-			return seg
-	return null
-
-
 func _draw_playhead() -> void:
 	var x := state.time_to_x(state.playhead)
 	if x < -2.0 or x > size.x + 2.0:
@@ -568,17 +549,3 @@ func _handle_key(e: InputEventKey) -> void:
 				accept_event()
 
 
-## 只在鼠标所在的那条泳道里找 —— 不同轨上时间相近的标记
-## (口型轨尤其密)才不会互相抢点击。
-func _marker_at(pos: Vector2) -> CueMarker:
-	var lane := state.lane_at(pos.y)
-	if lane == &"":
-		return null
-	var best: CueMarker = null
-	var best_d := MARKER_HIT_PX
-	for m in state.sheet.in_track(lane):
-		var d: float = absf(state.time_to_x(m.time) - pos.x)
-		if d <= best_d:
-			best_d = d
-			best = m
-	return best

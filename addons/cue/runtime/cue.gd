@@ -175,7 +175,6 @@ func resume() -> void:
 
 
 func stop() -> void:
-	var was := _playing
 	_playing = false
 	for p in _players:
 		if is_instance_valid(p):
@@ -187,10 +186,12 @@ func stop() -> void:
 		_clock.player = null
 		_clock.stop()
 	set_process(false)
-	if was:
-		# 这一轮作废,唤醒所有还挂在 at() 上的协程,否则它们会永远等下去
-		_generation += 1
-		marker_reached.emit(&"")
+	# 无条件放行。曾经这里用 `if was := _playing` 挡着,于是
+	# **先 pause() 再 stop()** 时 was 已经是 false,唤醒被跳过,
+	# 挂在 at() / after() 上的协程永远等不到信号。
+	# 多发一次唤醒是无害的(等待者比对轮次),漏发一次是死锁。
+	_generation += 1
+	marker_reached.emit(&"")
 
 
 ## 跳转到指定时间。
@@ -260,12 +261,18 @@ func at(marker_name: StringName) -> void:
 
 
 ## 等到标记之后再多等 [param delay] 秒。
+##
+## 和 [method at] 一样,判据是播放轮次而不是 [member _playing] ——
+## 暂停期间时间冻结,循环该原地等着,而不是当成"播放结束"提前返回。
 func after(marker_name: StringName, delay: float) -> void:
+	# 轮次要在 at() 之前记:如果 at() 是因为这一轮作废才返回的,
+	# 下面的循环必须立刻退出,而不是去等一个永远不会到的 target。
+	var gen := _generation
 	await at(marker_name)
 	if delay <= 0.0:
 		return
 	var target := time() + delay
-	while _playing and time() < target:
+	while _generation == gen and time() < target:
 		await get_tree().process_frame
 
 
