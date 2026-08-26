@@ -10,11 +10,11 @@
 | **Asset name** | Cue — 音频波形与命名事件标记 |
 | **Category** | Tools |
 | **Godot version** | 4.4(实际开发与验证在 **4.7.2.stable**;`plugin.cfg` 不限定下界,但下面「兼容性」一节列了已知的版本依赖) |
-| **Version string** | 0.9.0 |
+| **Version string** | 0.10.0 |
 | **Repository provider** | GitHub |
 | **Repository URL** | https://github.com/AmoseCP/godot-cue |
 | **Issues URL** | https://github.com/AmoseCP/godot-cue/issues |
-| **Download commit / tag** | `v0.9.0` |
+| **Download commit / tag** | `v0.10.0` |
 | **Icon URL** | https://raw.githubusercontent.com/AmoseCP/godot-cue/main/docs/icon.png |
 | **License** | MIT |
 
@@ -75,9 +75,9 @@ Cue 让你像用 Motion Canvas 的 waitUntil() 那样写分镜:在配音波形�
 - [ ] `addons/cue/plugin.cfg` 的 version 与 git tag 一致
 - [ ] README 顶部的截图链接可访问
 - [ ] LICENSE 在仓库根目录
-- [ ] tag 已推送:`git tag -a v0.9.0 -m "..." && git push origin v0.9.0`
+- [ ] tag 已推送:`git tag -a v0.10.0 -m "..." && git push origin v0.10.0`
 
-## 为什么是 0.9.0 而不是 1.0.0
+## 为什么不是 1.0.0
 
 计划里的 P0 / P1 / P2 都已实现并有自动化验收,但 **M2 的核心验收项
 ——「播放头位置与实际听到的声音偏差 < 1 帧,macOS 和 Windows 分别验证」
