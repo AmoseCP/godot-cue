@@ -81,7 +81,9 @@ func _run() -> void:
 				panel.call("_delete_marker", m3)
 				names.remove_at(0)
 		await get_tree().process_frame
-		var grew := ur.get_history_count() > depth_before
+		# 同上:历史到顶之后计数不再涨,所以也认"我们的动作在栈顶"
+		var grew := ur.get_history_count() > depth_before \
+			or ur.get_current_action_name().begins_with("Cue:")
 		_ok(grew, "第 %d 次编辑(类型 %d)应该产生一条 undo 记录" % [i, i % 5])
 		if grew:
 			snaps.append(_snapshot(sheet))
@@ -146,7 +148,9 @@ func _run() -> void:
 	panel.call("import_file", ProjectSettings.globalize_path("res://tests/fixtures/sample_rhubarb.json"))
 	await get_tree().process_frame
 	_ok(sheet.markers.size() == n_before + 12, "导入 12 个口型标记(得到 %d)" % (sheet.markers.size() - n_before))
-	_ok(ur.get_history_count() == depth_before + 1, "整批导入只占一条 undo 记录")
+	_ok(ur.get_history_count() == depth_before + 1
+			or ur.get_current_action_name().contains("导入"),
+		"整批导入只占一条 undo 记录(栈顶 =「%s」)" % ur.get_current_action_name())
 	_ok(sheet.validate().is_empty(), "导入后无重名:%s" % sheet.validate())
 	_ok(sheet.tracks.size() > 0, "导入自动补上了轨道定义")
 	ur.undo()
@@ -257,6 +261,60 @@ func _run() -> void:
 	_ok(not written.contains("[mouth]"), "折叠的 mouth 轨没有进剧本")
 	_ok(written.contains("[dialogue]"), "展开的 dialogue 轨进了剧本")
 	st.set_all_collapsed(false)
+
+	# ── 片段编辑(D10′ 之后新开的口子)────────────────────────────
+	var n_seg_before: int = sheet.segments.size()
+	var depth0 := ur.get_history_count()
+	panel.call("add_segment_from", "res://tests/probe/tone_1s.wav")
+	await get_tree().process_frame
+	_ok(sheet.segments.size() == n_seg_before + 1,
+		"添加片段(%d → %d)" % [n_seg_before, sheet.segments.size()])
+	# 计数不可靠:编辑器的 undo 历史有深度上限(实测 24),到顶之后
+	# 新动作会挤掉最旧的,get_history_count() 就不再增长了。
+	# 所以一律验行为 —— 能不能真的撤销回去。
+	ur.undo()
+	await get_tree().process_frame
+	_ok(sheet.segments.size() == n_seg_before, "撤销添加:片段被移除")
+	ur.redo()
+	await get_tree().process_frame
+	_ok(sheet.segments.size() == n_seg_before + 1, "重做添加:片段回来")
+	var added: CueAudioSegment = sheet.segments[sheet.segments.size() - 1]
+	_ok(added.path == "res://tests/probe/tone_1s.wav", "片段路径正确")
+
+	# 移动片段
+	var from_off: float = added.offset
+	panel.call("_move_segment", added, from_off, from_off + 1.25)
+	await get_tree().process_frame
+	_ok(absf(added.offset - (from_off + 1.25)) < 1e-4,
+		"移动片段 offset(得到 %.3f)" % added.offset)
+	ur.undo()
+	await get_tree().process_frame
+	_ok(absf(added.offset - from_off) < 1e-4, "撤销移动")
+	ur.redo()
+	await get_tree().process_frame
+	_ok(absf(added.offset - (from_off + 1.25)) < 1e-4, "重做移动")
+
+	# 时长要跟着片段走
+	var dur_with: float = sheet.duration()
+	panel.call("_remove_segment", added)
+	await get_tree().process_frame
+	_ok(sheet.segments.size() == n_seg_before, "移除片段")
+	_ok(sheet.duration() < dur_with, "移除后总时长变短(%.2f → %.2f)" % [dur_with, sheet.duration()])
+	ur.undo()
+	await get_tree().process_frame
+	_ok(sheet.segments.size() == n_seg_before + 1, "撤销移除,片段回来了")
+	_ok(sheet.index_of_segment(sheet.segments[sheet.segments.size() - 1]) >= 0,
+		"撤销后片段仍然有效(没有被释放)")
+	_ok(absf(sheet.duration() - dur_with) < 1e-4, "撤销后时长恢复")
+
+	# 最后一个片段不许删
+	while sheet.segments.size() > 1:
+		panel.call("_remove_segment", sheet.segments[sheet.segments.size() - 1])
+		await get_tree().process_frame
+	var last_n: int = sheet.segments.size()
+	panel.call("_remove_segment", sheet.segments[0])
+	await get_tree().process_frame
+	_ok(sheet.segments.size() == last_n, "拒绝删掉最后一个片段")
 
 	panel.queue_free()
 	print("EDIT RESULT ", "PASS" if _fail == 0 else "FAIL", "  %d 通过 / %d 失败" % [_pass, _fail])

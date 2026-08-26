@@ -29,6 +29,7 @@ var _pcm_cache: Dictionary = {}
 var _spec_job: int = 0
 var _spec_pending: bool = false
 var _spec_timer: SceneTreeTimer = null
+var _segment_dialog: EditorFileDialog = null
 var _dirty: bool = false
 var _analyzing: bool = false
 
@@ -113,6 +114,7 @@ func _ready() -> void:
 		state.notify_sheet_edited()
 		_view.queue_redraw())
 	_transport.spectrogram_toggled.connect(_on_spectrogram_toggled)
+	_transport.audio_action_requested.connect(_audio_action)
 	state.view_changed.connect(_schedule_spectrogram)
 	_transport.add_marker_requested.connect(func() -> void: _add_marker(state.maybe_snap(state.playhead)))
 	_transport.zoom_in_requested.connect(func() -> void: state.zoom_at(1.4, size.x * 0.5))
@@ -124,6 +126,7 @@ func _ready() -> void:
 	_view.marker_move_requested.connect(_move_marker)
 	_view.marker_rename_requested.connect(_begin_rename)
 	_view.seek_requested.connect(_seek)
+	_view.segment_move_requested.connect(_move_segment)
 	_ruler.seek_requested.connect(_seek)
 
 	state.view_changed.connect(_sync_scrollbar)
@@ -522,6 +525,95 @@ func _ensure_tracks(names: PackedStringArray) -> void:
 			continue
 		sheet.tracks.append(CueTrack.new(sn, palette[sheet.tracks.size() % palette.size()]))
 	state.notify_sheet_edited()
+
+
+# ── 片段编辑(全部走 undo)────────────────────────────────────────
+
+func _audio_action(action: int) -> void:
+	if state.sheet == null:
+		push_error("Cue:先打开一个 CueSheet。")
+		return
+	match action:
+		CueTransport.Audio.ADD_SEGMENT:
+			_segment_dialog_show()
+		CueTransport.Audio.REMOVE_SEGMENT:
+			_remove_segment(_view.selected_segment())
+		CueTransport.Audio.ALIGN_TO_PLAYHEAD:
+			var seg := _view.selected_segment()
+			if seg == null:
+				push_error("Cue:先在波形上点一下某个片段的把手,选中它。")
+				return
+			_move_segment(seg, seg.offset, state.maybe_snap(state.playhead))
+		CueTransport.Audio.REANALYZE:
+			analyze_waveform(true)
+
+
+func _segment_dialog_show() -> void:
+	if _segment_dialog == null:
+		_segment_dialog = EditorFileDialog.new()
+		_segment_dialog.file_mode = EditorFileDialog.FILE_MODE_OPEN_FILE
+		_segment_dialog.access = EditorFileDialog.ACCESS_RESOURCES
+		_segment_dialog.add_filter("*.wav", "WAV(16-bit PCM)")
+		_segment_dialog.add_filter("*.mp3,*.ogg,*.m4a,*.flac,*.opus",
+			"压缩音频(需要 ffmpeg)")
+		_segment_dialog.title = "添加音频片段"
+		_segment_dialog.file_selected.connect(add_segment_from)
+		add_child(_segment_dialog)
+	_segment_dialog.popup_centered_ratio(0.6)
+
+
+## 新片段落在播放头处 —— 多角色分轨时通常就是"从这里开始接话"。
+func add_segment_from(path: String) -> void:
+	var sheet := state.sheet
+	if sheet == null or _undo == null:
+		return
+	sheet.migrate_legacy()
+	var seg := CueAudioSegment.new(
+		StringName(path.get_file().get_basename()), path,
+		state.maybe_snap(state.playhead))
+	seg.stream = ResourceLoader.load(path) as AudioStream
+
+	_undo.create_action("Cue:添加音频片段「%s」" % seg.label(),
+		UndoRedo.MERGE_DISABLE, sheet)
+	_undo.add_do_method(sheet, "add_segment", seg)
+	_undo.add_undo_method(sheet, "remove_segment", seg)
+	_undo.commit_action()
+
+	_view.select_segment(seg)
+	analyze_waveform()
+
+
+func _remove_segment(seg: CueAudioSegment) -> void:
+	var sheet := state.sheet
+	if sheet == null or _undo == null:
+		return
+	if seg == null:
+		push_error("Cue:先在波形上点一下某个片段的把手,选中它。")
+		return
+	if sheet.segments.size() <= 1 and not sheet.segments.is_empty():
+		push_error("Cue:这是最后一个片段。CueSheet 至少要有一段音频。")
+		return
+	var idx := sheet.index_of_segment(seg)
+	if idx < 0:
+		return
+	_undo.create_action("Cue:移除音频片段「%s」" % seg.label(),
+		UndoRedo.MERGE_DISABLE, sheet)
+	_undo.add_do_method(sheet, "remove_segment", seg)
+	_undo.add_undo_method(sheet, "insert_segment", seg, idx)
+	_undo.commit_action()
+	_view.select_segment(null)
+
+
+func _move_segment(seg: CueAudioSegment, from_off: float, to_off: float) -> void:
+	if state.sheet == null or _undo == null or seg == null:
+		return
+	if is_equal_approx(from_off, to_off):
+		return
+	_undo.create_action("Cue:移动片段「%s」" % seg.label(),
+		UndoRedo.MERGE_DISABLE, state.sheet)
+	_undo.add_do_method(state.sheet, "set_segment_offset", seg, to_off)
+	_undo.add_undo_method(state.sheet, "set_segment_offset", seg, from_off)
+	_undo.commit_action()
 
 
 # ── 频谱图 ──────────────────────────────────────────────────────────

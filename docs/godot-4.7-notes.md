@@ -119,6 +119,11 @@ ERROR: UndoRedo history mismatch: expected 0, got 1.
 
 复现:`tests/probe/probe_undo.gd`,回归测试 `tests/edit_harness/`
 
+**`UndoRedo.get_history_count()` 会在编辑器的历史上限处饱和。** 实测到 24 条
+之后就不再增长 —— 新动作会挤掉最旧的。所以拿"计数有没有 +1"来断言
+"这个动作被记下来了"是不可靠的,应该验行为(真的 undo 一次看看),
+或者看 `get_current_action_name()` 是不是自己的动作。
+
 ---
 
 ## 5. `Engine.get_frames_drawn()` 在 `--headless` 下恒为 0

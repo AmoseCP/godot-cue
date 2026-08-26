@@ -74,6 +74,8 @@ var _seg_cache: Array[CueAudioSegment] = []
 ## 与 CueSheet 的 GLOBAL(0) 冲突,每次增删都刷一条
 ## [code]UndoRedo history mismatch[/code]。让 sheet 自己拿着引用就绕开了。
 var _retained: Array[CueMarker] = []
+## 同理,被摘下来的片段也要有人拿着。
+var _retained_segments: Array[CueAudioSegment] = []
 
 
 ## 按名字查找。名字在一个 sheet 内唯一(见 [method validate])。
@@ -255,6 +257,7 @@ func count_in_track(track_name: StringName) -> int:
 
 
 func add_segment(seg: CueAudioSegment) -> void:
+	_retained_segments.erase(seg)
 	segments.append(seg)
 	_seg_cache.clear()
 	touch()
@@ -264,11 +267,14 @@ func remove_segment(seg: CueAudioSegment) -> void:
 	var i := segments.find(seg)
 	if i >= 0:
 		segments.remove_at(i)
+		if not _retained_segments.has(seg):
+			_retained_segments.append(seg)
 		_seg_cache.clear()
 		touch()
 
 
 func insert_segment(seg: CueAudioSegment, index: int) -> void:
+	_retained_segments.erase(seg)
 	segments.insert(clampi(index, 0, segments.size()), seg)
 	_seg_cache.clear()
 	touch()

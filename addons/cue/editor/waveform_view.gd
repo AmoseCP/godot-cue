@@ -18,8 +18,13 @@ signal marker_move_requested(marker: CueMarker, from_time: float, to_time: float
 signal marker_rename_requested(marker: CueMarker)
 signal marker_selected(marker: CueMarker)
 signal seek_requested(time: float)
+signal segment_selected(segment: CueAudioSegment)
+signal segment_move_requested(segment: CueAudioSegment, from_offset: float, to_offset: float)
 
 const MARKER_HIT_PX := 7.0
+## 每条片段带顶部这么高的一条是"把手":在这里拖动整段音频,
+## 在带内其他地方点击仍然是移动播放头。分开之后没有歧义。
+const SEG_HANDLE_H := 13.0
 const MARKER_LABEL_PAD := 5.0
 
 var state: CueViewState = null
@@ -30,6 +35,10 @@ var _selected: CueMarker = null
 var _drag_marker: CueMarker = null
 var _drag_from_time: float = 0.0
 var _panning: bool = false
+var _selected_seg: CueAudioSegment = null
+var _drag_seg: CueAudioSegment = null
+var _drag_seg_from: float = 0.0
+var _drag_seg_grab_dt: float = 0.0
 ## 片段下标 → 已经算好的频谱贴图。由面板填,视图只负责画。
 var _spectra: Dictionary = {}
 var _spectra_pending: bool = false
@@ -103,6 +112,16 @@ func set_spectrogram_pending(v: bool) -> void:
 
 func selected_marker() -> CueMarker:
 	return _selected
+
+
+func selected_segment() -> CueAudioSegment:
+	return _selected_seg
+
+
+func select_segment(seg: CueAudioSegment) -> void:
+	_selected_seg = seg
+	segment_selected.emit(seg)
+	queue_redraw()
 
 
 func select(m: CueMarker) -> void:
@@ -287,10 +306,7 @@ func _draw_segments() -> void:
 			any_wave = true
 		elif seg.has_waveform():
 			any_wave = true
-		if _font != null and segs.size() > 1:
-			draw_string(_font, Vector2(4.0, band.position.y + float(_font_size)),
-				seg.label(), HORIZONTAL_ALIGNMENT_LEFT, -1,
-				maxi(_font_size - 2, 8), Color(_c_text, 0.45))
+		_draw_segment_handle(seg, band, si)
 
 	if state.spectrogram:
 		if _spectra.is_empty() and not _spectra_pending:
@@ -362,6 +378,46 @@ func _draw_markers() -> void:
 					maxi(_font_size - 1, 8), col)
 
 
+## 片段把手:一条横带,显示标签,拖它可以整体挪动这段音频。
+func _draw_segment_handle(seg: CueAudioSegment, band: Rect2, index: int) -> void:
+	var x0: float = maxf(state.time_to_x(seg.offset), 0.0)
+	var x1: float = minf(state.time_to_x(seg.end()), size.x)
+	if x1 <= x0:
+		return
+	var sel := seg == _selected_seg
+	var col := _c_selected if sel else _c_wave
+	var h := minf(SEG_HANDLE_H, band.size.y * 0.5)
+	draw_rect(Rect2(x0, band.position.y, x1 - x0, h), Color(col, 0.30 if sel else 0.14))
+	draw_line(Vector2(x0, band.position.y), Vector2(x0, band.position.y + band.size.y),
+		Color(col, 0.55), 2.0 if sel else 1.0)
+	if _font == null:
+		return
+	var label := seg.label()
+	if state.sheet.segment_count() > 1 or sel:
+		label += "  +%.2fs" % seg.offset
+	draw_string(_font, Vector2(x0 + 4.0, band.position.y + h - 3.0), label,
+		HORIZONTAL_ALIGNMENT_LEFT, x1 - x0 - 8.0,
+		maxi(_font_size - 2, 8), Color(_c_text, 0.85 if sel else 0.45))
+
+
+## 命中片段把手。返回 null 表示没点在任何把手上。
+func _segment_handle_at(pos: Vector2) -> CueAudioSegment:
+	if pos.y < _lanes_h():
+		return null
+	var segs := state.sheet.all_segments()
+	for si in segs.size():
+		var band := _segment_band(si, segs.size())
+		var h := minf(SEG_HANDLE_H, band.size.y * 0.5)
+		if pos.y < band.position.y or pos.y > band.position.y + h:
+			continue
+		var seg := segs[si]
+		var x0 := state.time_to_x(seg.offset)
+		var x1 := state.time_to_x(seg.end())
+		if pos.x >= x0 and pos.x <= x1:
+			return seg
+	return null
+
+
 func _draw_playhead() -> void:
 	var x := state.time_to_x(state.playhead)
 	if x < -2.0 or x > size.x + 2.0:
@@ -417,7 +473,17 @@ func _handle_button(e: InputEventMouseButton) -> void:
 func _press(e: InputEventMouseButton) -> void:
 	grab_focus()
 	if e.position.y >= _lanes_h():
+		# 先看是不是点在片段把手上 —— 是的话进入拖动片段,而不是移动播放头
+		var seg := _segment_handle_at(e.position)
+		if seg != null:
+			select(null)
+			select_segment(seg)
+			_drag_seg = seg
+			_drag_seg_from = seg.offset
+			_drag_seg_grab_dt = state.x_to_time(e.position.x) - seg.offset
+			return
 		select(null)
+		select_segment(null)
 		seek_requested.emit(state.maybe_snap(state.x_to_time(e.position.x)))
 		return
 
@@ -438,6 +504,15 @@ func _press(e: InputEventMouseButton) -> void:
 
 
 func _release() -> void:
+	if _drag_seg != null:
+		var to_off := _drag_seg.offset
+		# 和标记拖动同样的手法:先还原,再让 undo 系统设回去,
+		# 撤销栈里存的是一次完整的移动
+		if not is_equal_approx(to_off, _drag_seg_from):
+			_drag_seg.offset = _drag_seg_from
+			segment_move_requested.emit(_drag_seg, _drag_seg_from, to_off)
+		_drag_seg = null
+		return
 	if _drag_marker == null:
 		return
 	var to_t := _drag_marker.time
@@ -452,6 +527,16 @@ func _release() -> void:
 func _handle_motion(e: InputEventMouseMotion) -> void:
 	if _panning or (e.button_mask & MOUSE_BUTTON_MASK_MIDDLE) != 0:
 		state.pan_pixels(e.relative.x)
+		accept_event()
+		return
+	if _drag_seg != null:
+		var off: float = maxf(state.x_to_time(e.position.x) - _drag_seg_grab_dt, 0.0)
+		if e.ctrl_pressed or state.snap_to_frame:
+			off = state.sheet.snap(off)
+		_drag_seg.offset = off
+		state.notify_sheet_edited()
+		_lines_dirty = true
+		queue_redraw()
 		accept_event()
 		return
 	if _drag_marker != null:

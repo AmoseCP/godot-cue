@@ -14,6 +14,7 @@ signal collapse_all_requested(collapsed: bool)
 signal export_requested(kind: int)
 signal show_text_toggled(on: bool)
 signal spectrogram_toggled(on: bool)
+signal audio_action_requested(action: int)
 signal zoom_in_requested()
 signal zoom_out_requested()
 signal zoom_fit_requested()
@@ -113,6 +114,7 @@ func _build() -> void:
 	var imp_btn := _button("导入", "AnimationTrackList", "导入 Rhubarb JSON 或 MFA TextGrid")
 	imp_btn.pressed.connect(func() -> void: import_requested.emit())
 
+	_build_audio_menu()
 	_build_export_menu()
 
 	_progress = ProgressBar.new()
@@ -132,6 +134,28 @@ func _build() -> void:
 	zf.pressed.connect(func() -> void: zoom_fit_requested.emit())
 	var zi := _button("", "ZoomMore", "放大(滚轮上)")
 	zi.pressed.connect(func() -> void: zoom_in_requested.emit())
+
+
+enum Audio { ADD_SEGMENT, REMOVE_SEGMENT, ALIGN_TO_PLAYHEAD, REANALYZE }
+
+
+func _build_audio_menu() -> void:
+	var mb := MenuButton.new()
+	mb.text = "音频"
+	mb.tooltip_text = "增删音频片段、重新分析波形"
+	mb.focus_mode = Control.FOCUS_NONE
+	if Engine.is_editor_hint():
+		var theme := EditorInterface.get_editor_theme()
+		if theme != null and theme.has_icon("AudioStreamPlayer", "EditorIcons"):
+			mb.icon = theme.get_icon("AudioStreamPlayer", "EditorIcons")
+	var pm := mb.get_popup()
+	pm.add_item("添加音频片段…", Audio.ADD_SEGMENT)
+	pm.add_item("移除选中的片段", Audio.REMOVE_SEGMENT)
+	pm.add_item("选中片段对齐到播放头", Audio.ALIGN_TO_PLAYHEAD)
+	pm.add_separator()
+	pm.add_item("强制重新分析全部片段", Audio.REANALYZE)
+	pm.id_pressed.connect(func(id: int) -> void: audio_action_requested.emit(id))
+	add_child(mb)
 
 
 ## 导出动作都收在一个菜单里 —— 工具栏横向空间有限,
