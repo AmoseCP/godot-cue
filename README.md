@@ -224,6 +224,11 @@ sheet.segments = [peter, john]
 每段持有**自己的**波形缓存,所以改一个角色的配音时,「分析波形」
 只重算那一段 —— 哈希没变的片段直接复用。
 
+> **用脚本改标记时,走 sheet 的方法。** 直接写
+> `sheet.find(&"x").time = 5.0` 也能工作(sheet 会盯住标记的 `changed`
+> 信号),但 `sheet.markers.append(m)` 这种绕过 `add_marker()` 直接动数组的
+> 写法只有一条 O(1) 的条数兜底,不保证在所有情况下都被察觉。
+
 ```gdscript
 sheet.duration()          # 最靠后片段的结束时刻
 sheet.segment_at(t)       # 覆盖 t 的片段,空隙返回 null
@@ -604,14 +609,14 @@ tests/determinism.sh             # 只跑双次渲染哈希比对
 | `tests/test_core.gd` | PCM 解码、峰值、缓存、排序、吸附、绘制性能 | 70 |
 | `tests/test_runtime.gd` | `Cue` / `CueClock` / `CueMouthShape`、`at()` 边界、跨片段 | 65 |
 | `tests/test_import.gd` | Rhubarb / TextGrid 解析 | 50 |
-| `tests/test_segments.gd` | 多音频片段:几何、兼容升级、重叠与空隙 | 54 |
+| `tests/test_segments.gd` | 多音频片段:几何、兼容升级、重叠与空隙、排序缓存失效 | 63 |
 | `tests/test_lanes.gd` | 轨道泳道几何、折叠、命中测试 | 32 |
 | `tests/test_geometry.gd` | 波形视图几何:片段带、把手/标记命中、区域分界 | 31 |
 | `tests/test_subtitles.gd` | 字幕文本按时间查找、跨度消失 | 24 |
 | `tests/test_ffmpeg.gd` | MP3/OGG 真转码、缓存、缺工具提示 | 32 |
 | `tests/test_spectrogram.gd` | FFT 正确性(冲激/直流/双音)、频谱图、性能 | 38 |
 | `tests/test_export.gd` | 振幅包络、剧本生成(含真编译一遍)、标记导出往返 | 96 |
-| `tests/edit_harness/` | undo/redo、持久化、导入、泳道、包络、剧本、片段增删移(需编辑器) | 115 |
+| `tests/edit_harness/` | undo/redo、持久化、导入、泳道、包络、剧本、片段增删移(需编辑器) | 121 |
 | `tests/toggle_harness/` | 插件反复启停无泄漏(需编辑器) | 10 轮 |
 | `tests/determinism.sh` | 三个场景双次渲染逐帧 SHA256 | 91 + 121 + 103 帧 |
 
