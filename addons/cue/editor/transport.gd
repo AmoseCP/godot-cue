@@ -13,6 +13,7 @@ signal import_requested()
 signal collapse_all_requested(collapsed: bool)
 signal export_requested(kind: int)
 signal show_text_toggled(on: bool)
+signal spectrogram_toggled(on: bool)
 signal zoom_in_requested()
 signal zoom_out_requested()
 signal zoom_fit_requested()
@@ -89,6 +90,14 @@ func _build() -> void:
 		state.show_text = on
 		show_text_toggled.emit(on))
 	add_child(text_check)
+
+	var spec_check := CheckBox.new()
+	spec_check.text = "频谱"
+	spec_check.tooltip_text = "把波形换成频谱图(按需计算,不写进资源)"
+	spec_check.toggled.connect(func(on: bool) -> void:
+		state.spectrogram = on
+		spectrogram_toggled.emit(on))
+	add_child(spec_check)
 
 	var fold_btn := _button("", "CollapseTree", "折叠所有轨道")
 	fold_btn.pressed.connect(func() -> void: collapse_all_requested.emit(true))

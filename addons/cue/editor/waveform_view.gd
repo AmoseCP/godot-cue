@@ -30,6 +30,9 @@ var _selected: CueMarker = null
 var _drag_marker: CueMarker = null
 var _drag_from_time: float = 0.0
 var _panning: bool = false
+## 片段下标 → 已经算好的频谱贴图。由面板填,视图只负责画。
+var _spectra: Dictionary = {}
+var _spectra_pending: bool = false
 
 # 主题色。全部取自编辑器主题,不硬编码(见 CLAUDE.md 编辑器插件纪律)。
 var _c_bg: Color = Color(0.12, 0.12, 0.14)
@@ -80,6 +83,22 @@ func _pull_theme() -> void:
 	# 正确的键是 ("main", "EditorFonts") / ("main_size", "EditorFonts")。
 	_font = t.get_font("main", "EditorFonts")
 	_font_size = t.get_font_size("main_size", "EditorFonts")
+
+
+## 面板把算好的频谱贴图交进来。
+func set_spectrogram(index: int, tex: ImageTexture) -> void:
+	_spectra[index] = tex
+	queue_redraw()
+
+
+func clear_spectrograms() -> void:
+	_spectra.clear()
+	queue_redraw()
+
+
+func set_spectrogram_pending(v: bool) -> void:
+	_spectra_pending = v
+	queue_redraw()
 
 
 func selected_marker() -> CueMarker:
@@ -173,6 +192,9 @@ func _segment_band(index: int, total: int) -> Rect2:
 ## 每段各调一次会让分轨多的 sheet 出现明显的绘制开销。
 func _rebuild_lines() -> void:
 	_lines_dirty = false
+	if state != null and state.spectrogram:
+		_wave_lines = PackedVector2Array()
+		return
 	var pts := PackedVector2Array()
 	_wave_lines = pts
 	if state == null or state.sheet == null:
@@ -253,13 +275,29 @@ func _draw_segments() -> void:
 				minf(x1, size.x) - maxf(x0, 0.0), band.size.y),
 				Color(_c_wave, 0.05))
 		draw_line(Vector2(0, mid), Vector2(size.x, mid), _c_mid, 1.0)
-		if seg.has_waveform():
+		if state.spectrogram:
+			var tex: ImageTexture = _spectra.get(si, null)
+			if tex != null:
+				# 只填这段音频实际覆盖的横向范围,空白处保持底色
+				var sx0 := maxf(state.time_to_x(seg.offset), 0.0)
+				var sx1 := minf(state.time_to_x(seg.end()), size.x)
+				if sx1 > sx0:
+					draw_texture_rect(tex,
+						Rect2(sx0, band.position.y, sx1 - sx0, band.size.y), false)
+			any_wave = true
+		elif seg.has_waveform():
 			any_wave = true
 		if _font != null and segs.size() > 1:
 			draw_string(_font, Vector2(4.0, band.position.y + float(_font_size)),
 				seg.label(), HORIZONTAL_ALIGNMENT_LEFT, -1,
 				maxi(_font_size - 2, 8), Color(_c_text, 0.45))
 
+	if state.spectrogram:
+		if _spectra.is_empty() and not _spectra_pending:
+			_draw_hint("频谱图需要读源音频 —— 确认片段的 path 指向存在的文件")
+		elif _spectra_pending:
+			_draw_hint("正在计算频谱图…")
+		return
 	if _wave_lines.size() >= 2:
 		draw_multiline(_wave_lines, _c_wave, 1.0)
 	elif not any_wave:

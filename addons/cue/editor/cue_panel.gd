@@ -24,6 +24,11 @@ var _open_dialog: EditorFileDialog = null
 var _import_dialog: EditorFileDialog = null
 var _script_dialog: EditorFileDialog = null
 var _export_kind: int = -1
+## 频谱图相关。PCM 源按片段路径缓存 —— 每次平移都重读 26MB 文件太浪费。
+var _pcm_cache: Dictionary = {}
+var _spec_job: int = 0
+var _spec_pending: bool = false
+var _spec_timer: SceneTreeTimer = null
 var _dirty: bool = false
 var _analyzing: bool = false
 
@@ -107,6 +112,8 @@ func _ready() -> void:
 	_transport.show_text_toggled.connect(func(_on: bool) -> void:
 		state.notify_sheet_edited()
 		_view.queue_redraw())
+	_transport.spectrogram_toggled.connect(_on_spectrogram_toggled)
+	state.view_changed.connect(_schedule_spectrogram)
 	_transport.add_marker_requested.connect(func() -> void: _add_marker(state.maybe_snap(state.playhead)))
 	_transport.zoom_in_requested.connect(func() -> void: state.zoom_at(1.4, size.x * 0.5))
 	_transport.zoom_out_requested.connect(func() -> void: state.zoom_at(1.0 / 1.4, size.x * 0.5))
@@ -140,6 +147,10 @@ func _exit_tree() -> void:
 
 func open_sheet(sheet: CueSheet) -> void:
 	_stop()
+	_pcm_cache.clear()
+	_spec_job += 1
+	if _view != null:
+		_view.clear_spectrograms()
 	var old := state.sheet
 	if old != null and old.changed.is_connected(_after_edit):
 		old.changed.disconnect(_after_edit)
@@ -511,6 +522,85 @@ func _ensure_tracks(names: PackedStringArray) -> void:
 			continue
 		sheet.tracks.append(CueTrack.new(sn, palette[sheet.tracks.size() % palette.size()]))
 	state.notify_sheet_edited()
+
+
+# ── 频谱图 ──────────────────────────────────────────────────────────
+
+func _on_spectrogram_toggled(on: bool) -> void:
+	_view.clear_spectrograms()
+	if on:
+		_schedule_spectrogram()
+	else:
+		_spec_pending = false
+		_view.set_spectrogram_pending(false)
+		state.notify_sheet_edited()          # 让波形线段重建
+	_view.queue_redraw()
+
+
+## 视图一变就重算频谱代价太大(一屏约 240ms),所以拖动/缩放时先攒着,
+## 停手 0.15 秒再算。这期间旧图继续显示,不会闪。
+func _schedule_spectrogram() -> void:
+	if not state.spectrogram or state.sheet == null:
+		return
+	_spec_job += 1
+	var job := _spec_job
+	if _spec_timer != null and is_instance_valid(_spec_timer):
+		_spec_timer.timeout.disconnect(_run_spectrogram)
+	_spec_timer = get_tree().create_timer(0.15)
+	_spec_timer.timeout.connect(_run_spectrogram.bind(job), CONNECT_ONE_SHOT)
+
+
+func _run_spectrogram(job: int) -> void:
+	if job != _spec_job or not state.spectrogram or state.sheet == null:
+		return
+	var segs := state.sheet.all_segments()
+	if segs.is_empty():
+		return
+
+	_spec_pending = true
+	_view.set_spectrogram_pending(true)
+	var cols: int = clampi(int(_view.size.x * 0.5), 32, 480)
+	var theme := EditorInterface.get_editor_theme()
+	var low := theme.get_color("dark_color_2", "Editor")
+	var mid := theme.get_color("accent_color", "Editor")
+	var high := theme.get_color("font_color", "Editor")
+
+	for si in segs.size():
+		if job != _spec_job:
+			return                            # 期间又变了,这次作废
+		var seg := segs[si]
+		var src := _pcm_for(seg)
+		if src == null or not src.ok():
+			continue
+		# 只算这段音频在当前视野里露出来的那部分
+		var t0: float = maxf(state.scroll_sec - seg.offset, 0.0)
+		var t1: float = minf(state.x_to_time(_view.size.x) - seg.offset, seg.length())
+		if t1 <= t0:
+			continue
+		var spec := CueSpectrogram.new()
+		var img: Image = await spec.build_async(src, t0, t1, cols)
+		if job != _spec_job:
+			return
+		if img != null:
+			_view.set_spectrogram(si, CueSpectrogram.colorize(img, low, mid, high))
+
+	_spec_pending = false
+	_view.set_spectrogram_pending(false)
+
+
+## 频谱图需要原始 PCM(峰值缓存里没有相位信息),而重读文件很贵,
+## 所以按路径缓存。关掉频谱视图时清掉,免得一直占着几十兆。
+func _pcm_for(seg: CueAudioSegment) -> CuePcmReader.Source:
+	var key := seg.path if seg.path != "" else str(seg.get_instance_id())
+	if _pcm_cache.has(key):
+		return _pcm_cache[key]
+	var src := CuePcmReader.open(seg.path, seg.stream)
+	if not src.ok():
+		push_error(src.error)
+		_pcm_cache[key] = null
+		return null
+	_pcm_cache[key] = src
+	return src
 
 
 # ── 生成剧本骨架 ────────────────────────────────────────────────────

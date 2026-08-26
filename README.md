@@ -99,6 +99,7 @@ Rhubarb JSON → 导入器 → `mouth` 轨 → `CueMouthShape` → `Sprite2D`。
 | 点轨道头的名字 | 设为「加标记」的目标轨 |
 | 工具栏的折叠 / 展开按钮 | 一次性折叠或展开所有轨 |
 | 工具栏「字幕」勾选 | 泳道里显示文本还是标记名 |
+| 工具栏「频谱」勾选 | 波形 / 频谱图切换 |
 | 工具栏「导出」菜单 | 标记 JSON/CSV、包络 JSON/CSV、剧本骨架 |
 
 标记只能在**自己的泳道里**点选,波形区里点击一律是移动播放头 ——
@@ -409,6 +410,27 @@ rhubarb -f json -o mouth.json voice.wav
 
 ---
 
+## 频谱图
+
+工具栏勾「频谱」,波形换成频谱图 —— 看清辅音的位置、区分气声和实音、
+找出底噪,比看包络准得多。
+
+![频谱图](docs/spectrogram-example.png)
+
+- 频率轴取**对数**:线性轴会把人声那几百赫兹挤在最底下一两个像素里
+- 每段音频各自一条带,和波形视图一样
+- 纯 GDScript 的 radix-2 FFT,旋转因子和位反转表按尺寸缓存
+
+**按需计算,不写进资源。** 5 分钟音频的频谱图即使量化成 8-bit、只留 96 个
+频段也有 80 万个数据点,存进 `.tres` 会让文本资源膨胀成几兆;而频谱图是
+诊断用的视图(偶尔看一眼),不值得为它污染资源文件。
+
+实测 4.7.2 / M1:512 点 FFT 每次 **0.50ms**,一屏 480 列约 **320ms**。
+分块 `await` 所以编辑器不卡,拖动/缩放时防抖 0.15 秒再算,
+旧图在新图算好之前继续显示。
+
+---
+
 ## 字幕文本与波形对照
 
 标记的 `payload.text` 会显示出来 —— MFA TextGrid 导入器写词级 / 音素级文本,
@@ -478,6 +500,8 @@ addons/cue/
 │   ├── cue_envelope.gd             # 振幅包络 + JSON/CSV 导出
 │   ├── marker_export.gd            # 标记 JSON/CSV 导出与回读
 │   ├── ffmpeg_bridge.gd            # MP3/OGG 预转 WAV(可选依赖)
+│   ├── fft.gd                      # radix-2 FFT + Hann 窗
+│   ├── spectrogram.gd              # 按需 STFT,不落盘
 │   ├── envelope_builder.gd         # 从峰值缓存推包络
 │   └── script_generator.gd         # 标记 → GDScript 骨架
 ├── editor/                         # 只在编辑器里跑
@@ -534,6 +558,7 @@ tests/determinism.sh             # 只跑双次渲染哈希比对
 | `tests/test_lanes.gd` | 轨道泳道几何、折叠、命中测试 | 32 |
 | `tests/test_subtitles.gd` | 字幕文本按时间查找、跨度消失 | 24 |
 | `tests/test_ffmpeg.gd` | MP3/OGG 真转码、缓存、缺工具提示 | 32 |
+| `tests/test_spectrogram.gd` | FFT 正确性(冲激/直流/双音)、频谱图、性能 | 38 |
 | `tests/test_export.gd` | 振幅包络、剧本生成(含真编译一遍)、标记导出往返 | 96 |
 | `tests/edit_harness/` | undo/redo、持久化、导入、泳道、包络、剧本、片段升级(需编辑器) | 102 |
 | `tests/toggle_harness/` | 插件反复启停无泄漏(需编辑器) | 10 轮 |
