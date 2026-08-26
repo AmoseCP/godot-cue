@@ -24,6 +24,7 @@ func _init() -> void:
 	_test_snap()
 	_test_validate()
 	_test_redraw_perf()
+	_test_lod_pyramid()
 
 	print("\n=== %d 通过 / %d 失败 ===" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
@@ -330,3 +331,83 @@ func _test_redraw_perf() -> void:
 	print("        两段重叠时一帧 %dms" % dt2)
 	ok(dt2 <= 20, "两段时最慢 %dms ≤ 20ms" % dt2)
 	view.free()
+
+
+func _test_lod_pyramid() -> void:
+	print("\n[LOD] 降采样金字塔必须是精确的,不是近似")
+	# 造一份内容已知的缓存:每个 bucket 的幅度各不相同,
+	# 这样任何"取错了范围"都会被发现
+	var n := 4096
+	var wf := WaveformCache.new()
+	wf.mix_rate = 44100
+	wf.samples_per_bucket = 256
+	var mins := PackedFloat32Array(); mins.resize(n)
+	var maxs := PackedFloat32Array(); maxs.resize(n)
+	for i in n:
+		var a := sin(float(i) * 0.013) * 0.5 + sin(float(i) * 0.0007) * 0.45
+		mins[i] = -absf(a)
+		maxs[i] = absf(a) * (0.6 + 0.4 * cos(float(i) * 0.031))
+	wf.mins = mins
+	wf.maxs = maxs
+	wf.duration = float(n) * wf.seconds_per_bucket()
+
+	wf.ensure_lod()
+	ok(wf.lod_levels() >= 3, "建出了 %d 级" % wf.lod_levels())
+	ok(wf.lod_mins(0).size() == n, "第 0 级就是原数据")
+
+	# 逐级验证:每个 bucket 必须等于它覆盖的那段 level-0 数据的真实 min/max
+	var factor: int = WaveformCache.LOD_FACTOR
+	var exact := true
+	var worst := 0.0
+	for lv in range(1, wf.lod_levels()):
+		var lm := wf.lod_mins(lv)
+		var lx := wf.lod_maxs(lv)
+		var span: int = int(pow(float(factor), float(lv)))
+		for i in lm.size():
+			var lo := 1.0
+			var hi := -1.0
+			for k in span:
+				var j := i * span + k
+				if j >= n:
+					break
+				if mins[j] < lo: lo = mins[j]
+				if maxs[j] > hi: hi = maxs[j]
+			worst = maxf(worst, absf(lm[i] - lo))
+			worst = maxf(worst, absf(lx[i] - hi))
+			if absf(lm[i] - lo) > 1e-6 or absf(lx[i] - hi) > 1e-6:
+				exact = false
+	ok(exact, "每一级都等于对应 level-0 区间的真实 min/max(最大偏差 %.9f)" % worst)
+
+	# 级数选择:一列覆盖越多 bucket,用的级别越高
+	eq(wf.lod_level_for(1.0), 0, "一列一个 bucket → 第 0 级")
+	eq(wf.lod_level_for(4.0), 0, "一列 4 个 → 仍是第 0 级")
+	eq(wf.lod_level_for(5.0), 1, "一列 5 个 → 升到第 1 级")
+	eq(wf.lod_level_for(20.0), 2, "一列 20 个 → 第 2 级")
+	ok(wf.lod_level_for(1e9) == wf.lod_levels() - 1, "极端缩放不会越界")
+
+	# 每级的时间刻度必须跟着放大
+	near(wf.lod_seconds_per_bucket(0), wf.seconds_per_bucket(), 1e-9, "第 0 级时间刻度")
+	near(wf.lod_seconds_per_bucket(2), wf.seconds_per_bucket() * 16.0, 1e-9,
+		"第 2 级一个 bucket 覆盖 16 倍的时间")
+
+	# 金字塔不能进资源文件 —— 它是可重算的,存进去只会让 .tres 白白变大
+	var path := "user://lod_check.res"
+	eq(ResourceSaver.save(wf, path), OK, "保存")
+	var back: WaveformCache = ResourceLoader.load(path, "", ResourceLoader.CACHE_MODE_IGNORE)
+	eq(back.lod_levels(), 0, "重载后金字塔是空的(没有被序列化)")
+	back.ensure_lod()
+	eq(back.lod_levels(), wf.lod_levels(), "重载后能重新建出同样的级数")
+
+	# 重复调用不该重建
+	var before := wf.lod_levels()
+	wf.ensure_lod()
+	eq(wf.lod_levels(), before, "重复 ensure_lod() 是空操作")
+
+	# bucket 数很少时不该分级
+	var tiny := WaveformCache.new()
+	tiny.mix_rate = 44100
+	tiny.mins = PackedFloat32Array([-0.5, -0.2])
+	tiny.maxs = PackedFloat32Array([0.5, 0.2])
+	tiny.ensure_lod()
+	eq(tiny.lod_levels(), 1, "只有两个 bucket 时只有第 0 级")
+	eq(tiny.lod_level_for(100.0), 0, "级别不足时夹到第 0 级")

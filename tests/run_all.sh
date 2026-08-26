@@ -73,6 +73,7 @@ run_script "振幅包络与剧本骨架生成"                 tests/test_export
 run_script "字幕文本对照"                           tests/test_subtitles.gd
 run_script "MP3 / OGG 经 ffmpeg 预转"               tests/test_ffmpeg.gd
 run_script "FFT 与频谱图"                           tests/test_spectrogram.gd
+run_script "规模验证(一集体量)"                   tests/test_scale.gd
 
 run_harness "编辑器:插件反复启停无泄漏" \
 	"res://tests/toggle_harness/plugin.cfg" TOGGLE 500

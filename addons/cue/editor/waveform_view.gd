@@ -232,16 +232,19 @@ func _rebuild_lines() -> void:
 		if not seg.has_waveform():
 			continue
 		var wf := seg.waveform
-		var spb := wf.seconds_per_bucket()
-		if spb <= 0.0:
+		var spb0 := wf.seconds_per_bucket()
+		if spb0 <= 0.0:
 			continue
+		# 一列覆盖多少个 level-0 bucket → 选一级,使每列只扫 1~4 个
+		var per_col := (1.0 / state.px_per_sec) / spb0
+		var lv := wf.lod_level_for(per_col)
+		var spb := wf.lod_seconds_per_bucket(lv)
+		var mins := wf.lod_mins(lv)
+		var maxs := wf.lod_maxs(lv)
+		var n := mins.size()
 		var band := _segment_band(si, segs.size())
 		var mid := band.position.y + band.size.y * 0.5
 		var half := band.size.y * 0.5 - 2.0
-		var n := wf.bucket_count()
-		var mins := wf.mins
-		var maxs := wf.maxs
-
 		for x in w:
 			# x 是 sheet 时间轴上的像素,要减掉片段偏移才是段内时间
 			var t0 := state.x_to_time(float(x)) - seg.offset
